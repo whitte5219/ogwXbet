@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Roblox Verification</title>
+</head>
+<body>
+  <h1>Roblox Verification</h1>
+  <p>Enter your Roblox username:</p>
+
+  <input id="username" placeholder="Roblox username">
+  <button onclick="startVerification()">Verify</button>
+
+  <p id="status"></p>
+
+  <script>
+    function startVerification() {
+      const user = document.getElementById("username").value.trim();
+      if (!user) return alert("Enter a username!");
+
+      // This will be filled in later
+      document.getElementById("status").innerText =
+        "Generating verification code...";
+    }
+  </script>
+</body>
+</html>
