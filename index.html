@@ -1672,6 +1672,19 @@
                     
                     localStorage.setItem('ogwXbet_events', JSON.stringify(sampleEvents));
                 }
+                
+                // Initialize Whitte4 account if not exists
+                if (!localStorage.getItem('ogwXbet_Whitte4')) {
+                    const whitte4Account = {
+                        token: 'Whitte4ModToken123',
+                        creationDate: new Date().toISOString(),
+                        webhook: 'https://discord.com/api/webhooks/sample',
+                        bets: [],
+                        isModerator: true
+                    };
+                    
+                    localStorage.setItem('ogwXbet_Whitte4', JSON.stringify(whitte4Account));
+                }
             }
             
             function checkLoginStatus() {
