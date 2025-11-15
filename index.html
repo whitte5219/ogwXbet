@@ -2,6 +2,26 @@
 <html>
 <head>
   <title>Roblox Verification</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    input {
+      padding: 6px;
+      font-size: 16px;
+    }
+    button {
+      padding: 8px 12px;
+      font-size: 16px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 20px;
+      font-size: 18px;
+    }
+  </style>
 </head>
 <body>
   <h1>Roblox Verification</h1>
@@ -13,13 +33,58 @@
   <p id="status"></p>
 
   <script>
+    let verifyCode = null;
+
     function startVerification() {
       const user = document.getElementById("username").value.trim();
       if (!user) return alert("Enter a username!");
 
-      // This will be filled in later
-      document.getElementById("status").innerText =
-        "Generating verification code...";
+      // Generate random verification code
+      verifyCode = "RBLX-" + Math.floor(10000 + Math.random() * 90000);
+
+      document.getElementById("status").innerHTML =
+        `Your verification code is:<br><b>${verifyCode}</b><br><br>
+        Put this code inside your Roblox profile description (bio).<br><br>
+        After adding it, click the button below:<br><br>
+        <button onclick="checkVerification()">Check Verification</button>`;
+    }
+
+    async function checkVerification() {
+      const user = document.getElementById("username").value.trim();
+      if (!verifyCode) return alert("Start the verification first!");
+
+      document.getElementById("status").innerText = "Checking profile...";
+
+      // Search Roblox user by username
+      const res = await fetch(
+        `https://corsproxy.io/?https://users.roblox.com/v1/users/search?keyword=${user}`
+      );
+
+      const data = await res.json();
+
+      if (!data.data || data.data.length === 0) {
+        document.getElementById("status").innerText = "User not found!";
+        return;
+      }
+
+      const userId = data.data[0].id;
+
+      // Fetch user's profile
+      const descRes = await fetch(
+        `https://corsproxy.io/?https://users.roblox.com/v1/users/${userId}`
+      );
+      const descData = await descRes.json();
+
+      if (descData.description && descData.description.includes(verifyCode)) {
+        document.getElementById("status").innerHTML =
+          `<b>Verification successful!</b><br>
+          Username: ${user}<br>
+          User ID: ${userId}`;
+      } else {
+        document.getElementById("status").innerHTML =
+          `Code not found in bio.<br><br>
+          Make sure your description contains:<br><b>${verifyCode}</b>`;
+      }
     }
   </script>
 </body>
