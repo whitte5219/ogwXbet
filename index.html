@@ -180,6 +180,14 @@
             box-shadow: none;
         }
 
+        .btn-warning {
+            background: linear-gradient(to right, #ff9800, #f57c00);
+        }
+
+        .btn-warning:hover {
+            box-shadow: 0 5px 15px rgba(255, 152, 0, 0.4);
+        }
+
         .status {
             margin-top: 20px;
             padding: 15px;
@@ -557,6 +565,113 @@
             color: white;
         }
 
+        /* Account Tab Styles */
+        .account-section {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: var(--shadow);
+        }
+
+        .account-section h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            color: var(--accent);
+        }
+
+        .account-section h3 i {
+            font-size: 1.5rem;
+        }
+
+        .account-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .detail-item {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .detail-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+        }
+
+        .detail-value {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        .token-display {
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            font-family: monospace;
+            font-size: 1.1rem;
+            text-align: center;
+            word-break: break-all;
+            border: 1px dashed var(--accent);
+        }
+
+        .bets-list {
+            margin-top: 20px;
+        }
+
+        .bet-item {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .bet-info {
+            flex: 1;
+        }
+
+        .bet-event {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+
+        .bet-details {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .bet-status {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-pending {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: #ff9800;
+        }
+
+        .status-won {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+
+        .status-lost {
+            background-color: rgba(244, 67, 54, 0.2);
+            color: var(--danger);
+        }
+
         /* Empty State */
         .empty-state {
             text-align: center;
@@ -596,6 +711,19 @@
             
             .features {
                 grid-template-columns: 1fr;
+            }
+            
+            .account-details {
+                grid-template-columns: 1fr;
+            }
+            
+            .bet-item {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .bet-status {
+                margin-top: 10px;
             }
         }
     </style>
@@ -707,6 +835,7 @@
                     <ul>
                         <li><a href="#" class="nav-link active" data-tab="info">Info</a></li>
                         <li><a href="#" class="nav-link" data-tab="ogws">OGWs</a></li>
+                        <li><a href="#" class="nav-link" data-tab="account">Account</a></li>
                     </ul>
                 </nav>
                 
@@ -899,6 +1028,66 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Account Tab Content -->
+            <div id="account-tab" class="tab-content">
+                <h2>Account Settings</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage your account settings and view your betting history.</p>
+                
+                <div class="account-section">
+                    <h3><i class="fas fa-user-circle"></i> Account Information</h3>
+                    <div class="account-details">
+                        <div class="detail-item">
+                            <div class="detail-label">Username</div>
+                            <div class="detail-value" id="account-username">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Account Created</div>
+                            <div class="detail-value" id="account-creation-date">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Total Bets</div>
+                            <div class="detail-value" id="total-bets">0</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Winning Rate</div>
+                            <div class="detail-value" id="winning-rate">0%</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="account-section">
+                    <h3><i class="fas fa-key"></i> Security Settings</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Manage your login token and security preferences.</p>
+                    
+                    <div class="warning">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        <strong>Important:</strong> Changing your login token will invalidate your current token. The new token will be sent to your Discord webhook.
+                    </div>
+                    
+                    <button class="btn btn-warning" id="change-token-btn" style="margin-top: 20px;">
+                        <i class="fas fa-sync-alt"></i> Generate New Login Token
+                    </button>
+                    
+                    <div class="status" id="token-status">
+                        <!-- Token status messages will appear here -->
+                    </div>
+                </div>
+                
+                <div class="account-section">
+                    <h3><i class="fas fa-history"></i> Betting History</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">View your recent bets and predictions.</p>
+                    
+                    <div class="bets-list" id="bets-list">
+                        <!-- Bet items will be added here dynamically -->
+                        <div class="empty-state">
+                            <i class="fas fa-clipboard-list"></i>
+                            <h3>No Bets Yet</h3>
+                            <p>You haven't placed any bets yet. Visit the OGWs tab to get started!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -918,6 +1107,15 @@
             const showRegisterBtn = document.getElementById('show-register-btn');
             const showLoginBtn = document.getElementById('show-login-btn');
             const logoutBtn = document.getElementById('logout-btn');
+            const changeTokenBtn = document.getElementById('change-token-btn');
+            
+            // Account elements
+            const accountUsername = document.getElementById('account-username');
+            const accountCreationDate = document.getElementById('account-creation-date');
+            const totalBets = document.getElementById('total-bets');
+            const winningRate = document.getElementById('winning-rate');
+            const betsList = document.getElementById('bets-list');
+            const tokenStatus = document.getElementById('token-status');
             
             // Store generated token
             let generatedToken = null;
@@ -973,6 +1171,14 @@
                 generatedToken = generateToken();
                 currentUsername = username;
                 
+                // Prepare account data
+                const accountData = {
+                    token: generatedToken,
+                    creationDate: new Date().toISOString(),
+                    webhook: webhook,
+                    bets: []
+                };
+                
                 // Prepare payload for Discord webhook
                 const payload = {
                     content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${generatedToken}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**\nA login token is used to log into your account. Sharing it will allow access to your account to other people.`
@@ -990,7 +1196,7 @@
                     
                     if (response.ok) {
                         // Store account in localStorage
-                        localStorage.setItem(`ogwXbet_${username}`, generatedToken);
+                        localStorage.setItem(`ogwXbet_${username}`, JSON.stringify(accountData));
                         
                         // Show success and move to login
                         showStatus('Account created successfully! Token sent to your Discord.', 'success');
@@ -1030,15 +1236,17 @@
                 }
                 
                 // Check if account exists and token matches
-                const storedToken = localStorage.getItem(`ogwXbet_${username}`);
+                const accountData = localStorage.getItem(`ogwXbet_${username}`);
                 
-                if (!storedToken) {
+                if (!accountData) {
                     loginStatus.textContent = 'Account not found. Please create an account first.';
                     loginStatus.className = 'status error';
                     return;
                 }
                 
-                if (storedToken !== token) {
+                const parsedData = JSON.parse(accountData);
+                
+                if (parsedData.token !== token) {
                     loginStatus.textContent = 'Invalid token. Please check and try again.';
                     loginStatus.className = 'status error';
                     return;
@@ -1065,6 +1273,62 @@
                 showLoginPage();
             });
             
+            // Change token function
+            changeTokenBtn.addEventListener('click', async function() {
+                const username = sessionStorage.getItem('ogwXbet_currentUser');
+                if (!username) return;
+                
+                // Get account data
+                const accountData = JSON.parse(localStorage.getItem(`ogwXbet_${username}`));
+                if (!accountData || !accountData.webhook) {
+                    tokenStatus.textContent = 'Error: Could not find your webhook information.';
+                    tokenStatus.className = 'status error';
+                    return;
+                }
+                
+                // Show loading state
+                changeTokenBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating New Token...';
+                changeTokenBtn.disabled = true;
+                
+                // Generate new token
+                const newToken = generateToken();
+                
+                // Prepare payload for Discord webhook
+                const payload = {
+                    content: `**New Login Token Generated**\n\nUsername: ${username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**\nYour previous token has been invalidated. Use this new token to log in.`
+                };
+                
+                try {
+                    // Send to webhook
+                    const response = await fetch(accountData.webhook, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (response.ok) {
+                        // Update account data with new token
+                        accountData.token = newToken;
+                        localStorage.setItem(`ogwXbet_${username}`, JSON.stringify(accountData));
+                        
+                        tokenStatus.textContent = 'New token generated and sent to your Discord!';
+                        tokenStatus.className = 'status success';
+                    } else {
+                        tokenStatus.textContent = 'Failed to send new token. Please check your webhook URL.';
+                        tokenStatus.className = 'status error';
+                    }
+                } catch (error) {
+                    tokenStatus.textContent = 'Error sending to webhook. Please check your connection and try again.';
+                    tokenStatus.className = 'status error';
+                }
+                
+                // Reset button
+                changeTokenBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Generate New Login Token';
+                changeTokenBtn.disabled = false;
+            });
+            
             // Dashboard navigation
             const navLinks = document.querySelectorAll('.nav-link');
             const tabContents = document.querySelectorAll('.tab-content');
@@ -1083,6 +1347,11 @@
                     // Show corresponding tab content
                     const tabId = this.getAttribute('data-tab') + '-tab';
                     document.getElementById(tabId).classList.add('active');
+                    
+                    // If account tab is clicked, update account info
+                    if (this.getAttribute('data-tab') === 'account') {
+                        updateAccountInfo();
+                    }
                 });
             });
             
@@ -1151,6 +1420,11 @@
                 loginPage.style.display = 'none';
                 dashboardPage.style.display = 'block';
                 document.getElementById('username-display').textContent = `Welcome, ${username}`;
+                
+                // Update account info if account tab is active
+                if (document.getElementById('account-tab').classList.contains('active')) {
+                    updateAccountInfo();
+                }
             }
             
             function showLoginPage() {
@@ -1166,6 +1440,76 @@
                 // Make sure login form is visible
                 accountCreationSection.classList.add('hidden');
                 loginSection.classList.remove('hidden');
+            }
+            
+            function updateAccountInfo() {
+                const username = sessionStorage.getItem('ogwXbet_currentUser');
+                if (!username) return;
+                
+                const accountData = JSON.parse(localStorage.getItem(`ogwXbet_${username}`));
+                if (!accountData) return;
+                
+                // Update account information
+                accountUsername.textContent = username;
+                accountCreationDate.textContent = new Date(accountData.creationDate).toLocaleDateString();
+                
+                // Calculate betting stats
+                const bets = accountData.bets || [];
+                totalBets.textContent = bets.length;
+                
+                if (bets.length > 0) {
+                    const wonBets = bets.filter(bet => bet.status === 'won').length;
+                    const winRate = Math.round((wonBets / bets.length) * 100);
+                    winningRate.textContent = `${winRate}%`;
+                    
+                    // Display bets
+                    displayBets(bets);
+                } else {
+                    winningRate.textContent = '0%';
+                    betsList.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-clipboard-list"></i>
+                            <h3>No Bets Yet</h3>
+                            <p>You haven't placed any bets yet. Visit the OGWs tab to get started!</p>
+                        </div>
+                    `;
+                }
+            }
+            
+            function displayBets(bets) {
+                if (bets.length === 0) {
+                    betsList.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-clipboard-list"></i>
+                            <h3>No Bets Yet</h3>
+                            <p>You haven't placed any bets yet. Visit the OGWs tab to get started!</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let betsHTML = '';
+                bets.forEach(bet => {
+                    let statusClass = 'status-pending';
+                    if (bet.status === 'won') statusClass = 'status-won';
+                    if (bet.status === 'lost') statusClass = 'status-lost';
+                    
+                    betsHTML += `
+                        <div class="bet-item">
+                            <div class="bet-info">
+                                <div class="bet-event">${bet.event}</div>
+                                <div class="bet-details">
+                                    Prediction: ${bet.prediction} | Amount: ${bet.amount} | Odds: ${bet.odds}
+                                </div>
+                            </div>
+                            <div class="bet-status ${statusClass}">
+                                ${bet.status.charAt(0).toUpperCase() + bet.status.slice(1)}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                betsList.innerHTML = betsHTML;
             }
         });
     </script>
