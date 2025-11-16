@@ -2,257 +2,382 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OGW X Bet Dashboard</title>
+    <meta name="viewport" content="width-width, initial-scale=1.0">
+    <title>ogwXbet - Premium Betting Platform</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="style.css">
-    <script src="https://kit.fontawesome.com/a2e860f0c4.js" crossorigin="anonymous"></script>
 </head>
 <body>
+    <!-- Login Page -->
+    <div class="login-container" id="login-page">
+        <div class="container">
+            <header>
+                <div class="logo">
+                    <i class="fas fa-dice"></i>
+                    <h1>ogwXbet</h1>
+                </div>
+                <p class="tagline">Premium betting experience with secure authentication</p>
+            </header>
 
-<!-- LOGIN PAGE -->
-<div id="login-page" class="login-container">
+            <!-- Login Section -->
+            <div class="card" id="login-section">
+                <h2 class="card-title">Login to Your Account</h2>
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" placeholder="Enter your username">
+                </div>
+                <div class="form-group">
+                    <label for="login-token">Login Token</label>
+                    <input type="password" id="login-token" placeholder="Enter your login token">
+                    <button type="button" class="password-toggle" id="toggle-token">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </div>
+                <button class="btn" id="login-btn">Login</button>
+                
+                <div class="status" id="login-status"></div>
+                
+                <div class="switch-form">
+                    <p>Don't have an account?</p>
+                    <button class="btn btn-secondary" id="show-register-btn">Create Account</button>
+                </div>
+            </div>
 
-    <header>
-        <div class="logo">
-            <i class="fas fa-dice"></i>
-            <h1>OGW X Bet</h1>
+            <!-- Account Creation Section -->
+            <div class="card hidden" id="account-creation">
+                <h2 class="card-title">Create Your Account</h2>
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" placeholder="Enter your username">
+                </div>
+                <div class="form-group">
+                    <label for="webhook">Discord Webhook URL</label>
+                    <input type="text" id="webhook" placeholder="https://discord.com/api/webhooks/...">
+                </div>
+                <button class="btn" id="create-account-btn">Create Account</button>
+                
+                <div class="warning">
+                    <i class="fas fa-exclamation-triangle"></i> 
+                    Your username will be permanently reserved after account creation
+                </div>
+                
+                <div class="info-box">
+                    <i class="fas fa-info-circle"></i>
+                    Your login token will be sent to your Discord webhook. You won't see it on this website for security reasons.
+                </div>
+                
+                <div class="features">
+                    <div class="feature">
+                        <i class="fas fa-shield-alt"></i>
+                        <p>Secure Authentication</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-bolt"></i>
+                        <p>Fast Verification</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-user-lock"></i>
+                        <p>Unique Usernames</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-history"></i>
+                        <p>Session Management</p>
+                    </div>
+                </div>
+                
+                <div class="switch-form">
+                    <p>Already have an account?</p>
+                    <button class="btn btn-secondary" id="show-login-btn">Log In</button>
+                </div>
+            </div>
+
+            <div class="status" id="status-message"></div>
         </div>
-        <p class="tagline">Secure, Modern, Performance Driven</p>
-    </header>
 
-    <div class="container">
-
-        <!-- Account Creation -->
-        <div id="account-creation" class="card hidden">
-            <h2 class="card-title">Create Account</h2>
-
-            <div class="form-group">
-                <label>Username</label>
-                <input id="username" type="text" placeholder="Enter username">
-            </div>
-
-            <div class="form-group">
-                <label>Discord Webhook</label>
-                <input id="webhook" type="text" placeholder="https://discord.com/api/webhooks/...">
-            </div>
-
-            <button id="create-account-btn" class="btn">Create</button>
-            <p id="status-message" class="status"></p>
-
-            <div class="switch-form">
-                Already have an account?
-                <button id="show-login-btn" class="btn btn-secondary">Log In</button>
-            </div>
-        </div>
-
-        <!-- Login -->
-        <div id="login-section" class="card">
-            <h2 class="card-title">Log In</h2>
-
-            <div class="form-group">
-                <label>Username</label>
-                <input id="login-username" type="text" placeholder="Enter username">
-            </div>
-
-            <div class="form-group">
-                <label>Token</label>
-                <input id="login-token" type="password" placeholder="Enter login token">
-                <button id="toggle-token" class="password-toggle"><i class="fas fa-eye"></i></button>
-            </div>
-
-            <button id="login-btn" class="btn">Log In</button>
-            <p id="login-status" class="status"></p>
-
-            <div class="switch-form">
-                No account?
-                <button id="show-register-btn" class="btn btn-secondary">Create One</button>
-            </div>
-        </div>
-
+        <footer>
+            <p>© 2023 ogwXbet. All rights reserved. | Secure betting platform</p>
+        </footer>
     </div>
 
-    <footer>
-        OGW X Bet © 2025
-    </footer>
-</div>
+    <!-- Dashboard -->
+    <div class="dashboard" id="dashboard-page">
+        <!-- Dashboard Header -->
+        <header class="dashboard-header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-dice"></i>
+                    <h1>ogwXbet</h1>
+                </div>
+                
+                <nav>
+                    <ul>
+                        <li><a href="#" class="nav-link active" data-tab="info">Info</a></li>
+                        <li><a href="#" class="nav-link" data-tab="ogws">OGWs</a></li>
+                        <li><a href="#" class="nav-link" data-tab="account">Account</a></li>
+                        <li><a href="#" class="nav-link hidden" data-tab="admin" id="admin-nav">Admin</a></li>
+                    </ul>
+                </nav>
+                
+                <div class="user-info">
+                    <span id="username-display">Welcome, User</span>
+                    <span class="moderator-badge hidden" id="moderator-badge">MODERATOR</span>
+                    <button class="logout-btn" id="logout-btn">Logout</button>
+                </div>
+            </div>
+        </header>
 
-<!-- DASHBOARD PAGE -->
-<div id="dashboard-page" class="dashboard">
-
-    <!-- HEADER -->
-    <div class="dashboard-header">
-        <div class="header-content">
-
-            <nav>
-                <ul>
-                    <li><a class="nav-link active" data-tab="info">Info</a></li>
-                    <li><a class="nav-link" data-tab="ogws">OGWs</a></li>
-                    <li><a class="nav-link" data-tab="account">Account</a></li>
-                    <li><a class="nav-link hidden" id="admin-nav" data-tab="admin">Admin</a></li>
-                </ul>
-            </nav>
-
-            <div class="user-info">
-                <span id="username-display"></span>
-                <span id="moderator-badge" class="moderator-badge hidden">MODERATOR</span>
-                <button id="logout-btn" class="logout-btn">Logout</button>
+        <!-- Main Content -->
+        <div class="dashboard-container">
+            <!-- Info Tab Content -->
+            <div id="info-tab" class="tab-content active">
+                <h2>About ogwXbet</h2>
+                <div class="info-grid">
+                    <div class="info-card">
+                        <h3><i class="fas fa-shield-alt"></i> Secure & Reliable</h3>
+                        <p>ogwXbet employs state-of-the-art security measures to ensure your data and funds are always protected.</p>
+                    </div>
+                    
+                    <div class="info-card">
+                        <h3><i class="fas fa-bolt"></i> Fast Payouts</h3>
+                        <p>We pride ourselves on our quick withdrawal processing. Most payouts are completed within 24 hours.</p>
+                    </div>
+                    
+                    <div class="info-card">
+                        <h3><i class="fas fa-trophy"></i> Competitive Odds</h3>
+                        <p>Get the best value for your bets with our industry-leading odds across all events.</p>
+                    </div>
+                    
+                    <div class="info-card">
+                        <h3><i class="fas fa-headset"></i> 24/7 Support</h3>
+                        <p>Our dedicated customer support team is available around the clock to assist with any questions.</p>
+                    </div>
+                </div>
+                
+                <div class="stats">
+                    <div class="stat-card">
+                        <h2>10,000+</h2>
+                        <p>Active Users</p>
+                    </div>
+                    <div class="stat-card">
+                        <h2>500+</h2>
+                        <p>Daily Events</p>
+                    </div>
+                    <div class="stat-card">
+                        <h2>98%</h2>
+                        <p>Payout Rate</p>
+                    </div>
+                    <div class="stat-card">
+                        <h2>24h</h2>
+                        <p>Avg. Payout Time</p>
+                    </div>
+                </div>
             </div>
 
+            <!-- OGWs Tab Content -->
+            <div id="ogws-tab" class="tab-content">
+                <h2>OGW Events</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Bet on your favorite OGW events with competitive odds and fast payouts.</p>
+                
+                <div class="category-tabs">
+                    <div class="category-tab active" data-category="upcoming">Upcoming</div>
+                    <div class="category-tab" data-category="active">Active</div>
+                    <div class="category-tab" data-category="ended">Ended</div>
+                </div>
+                
+                <!-- Upcoming Events -->
+                <div id="upcoming-content" class="category-content active">
+                    <div class="events-grid" id="upcoming-events"></div>
+                </div>
+                
+                <!-- Active Events -->
+                <div id="active-content" class="category-content">
+                    <div class="events-grid" id="active-events"></div>
+                </div>
+                
+                <!-- Ended Events -->
+                <div id="ended-content" class="category-content">
+                    <div class="events-grid" id="ended-events"></div>
+                </div>
+            </div>
+
+            <!-- Account Tab Content -->
+            <div id="account-tab" class="tab-content">
+                <h2>Account Settings</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage your account settings and view your betting history.</p>
+                
+                <div class="account-section">
+                    <h3><i class="fas fa-user-circle"></i> Account Information</h3>
+                    <div class="account-details">
+                        <div class="detail-item">
+                            <div class="detail-label">Username</div>
+                            <div class="detail-value" id="account-username">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Account Created</div>
+                            <div class="detail-value" id="account-creation-date">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Total Bets</div>
+                            <div class="detail-value" id="total-bets">0</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Winning Rate</div>
+                            <div class="detail-value" id="winning-rate">0%</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Reputation</div>
+                            <div class="detail-value" id="account-reputation">0</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="account-section">
+                    <h3><i class="fas fa-key"></i> Security Settings</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Manage your login token and security preferences.</p>
+                    
+                    <div class="warning">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        <strong>Important:</strong> Changing your login token will invalidate your current token.
+                    </div>
+                    
+                    <button class="btn btn-warning" id="change-token-btn" style="margin-top: 20px;">
+                        <i class="fas fa-sync-alt"></i> Generate New Login Token
+                    </button>
+                    
+                    <div class="status" id="token-status"></div>
+                </div>
+
+                <div class="account-section">
+                    <h3><i class="fas fa-bullseye"></i> Your Predictions</h3>
+                    <div id="predictions-list" class="predictions-list"></div>
+                </div>
+            </div>
+
+            <!-- Admin Tab Content -->
+            <div id="admin-tab" class="tab-content">
+                <h2>Admin Panel</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage platform accounts and OGW events.</p>
+                
+                <div class="admin-section">
+                    <h3><i class="fas fa-chart-bar"></i> Platform Statistics</h3>
+                    <div class="admin-stats">
+                        <div class="admin-stat">
+                            <div class="admin-stat-value" id="total-users">0</div>
+                            <div class="admin-stat-label">Total Users</div>
+                        </div>
+                        <div class="admin-stat">
+                            <div class="admin-stat-value" id="total-events">0</div>
+                            <div class="admin-stat-label">Total Events</div>
+                        </div>
+                        <div class="admin-stat">
+                            <div class="admin-stat-value" id="active-bets">0</div>
+                            <div class="admin-stat-label">Active Bets</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="admin-section">
+                    <h3><i class="fas fa-users"></i> User Accounts</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">View all registered user accounts.</p>
+                    
+                    <div class="accounts-table-container">
+                        <table class="accounts-table">
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Account Created</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="accounts-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="admin-section">
+                    <h3><i class="fas fa-calendar-plus"></i> Add OGW Event</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Create new OGW events for the platform.</p>
+                    
+                    <div class="event-form">
+                        <div class="form-group form-full-width">
+                            <label for="event-title">Event Title</label>
+                            <input type="text" id="event-title" placeholder="Enter event title">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="team-a">Team A</label>
+                            <input type="text" id="team-a" placeholder="Enter Team A name">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="team-b">Team B</label>
+                            <input type="text" id="team-b" placeholder="Enter Team B name">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="event-date">Event Date</label>
+                            <input type="datetime-local" id="event-date">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="event-category">Category</label>
+                            <select id="event-category">
+                                <option value="upcoming">Upcoming</option>
+                                <option value="active">Active</option>
+                                <option value="ended">Ended</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-success" id="add-event-btn" style="margin-top: 20px;">
+                        <i class="fas fa-plus"></i> Add Event
+                    </button>
+                    
+                    <div class="status" id="event-status"></div>
+                </div>
+
+                <div class="admin-section">
+                    <h3><i class="fas fa-clipboard-list"></i> Event Log</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">
+                        View all ended/deleted events. This log is only visible to admins.
+                    </p>
+                    <div class="accounts-table-container">
+                        <table class="accounts-table">
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Winner</th>
+                                    <th>Ended By</th>
+                                    <th>Ended At</th>
+                                </tr>
+                            </thead>
+                            <tbody id="event-log-body"></tbody>
+                        </table>
+                    </div>
+                    <button class="btn btn-danger" id="clear-event-log-btn" style="margin-top: 20px;">
+                        <i class="fas fa-trash-alt"></i> Clear Event Log
+                    </button>
+                    <div class="status" id="event-log-status"></div>
+                </div>
+            </div>
         </div>
     </div>
 
-    <div class="dashboard-container">
-
-        <!-- INFO TAB -->
-        <div id="info-tab" class="tab-content active">
-
-            <div class="info-grid">
-
-                <!-- BOX 1 — SECURITY -->
-                <div class="info-card info-security">
-                    <h3><i class="fas fa-lock"></i> Security</h3>
-                    <p>
-                        Our platform provides secure token generation that cannot be accessed through the website,
-                        ensuring only you have access. Secure payment options and active moderator support help
-                        maintain full protection for all users.
-                    </p>
-                </div>
-
-                <!-- BOX 3 — ACCOUNTS -->
-                <div class="info-card info-accounts">
-                    <h3><i class="fas fa-user-shield"></i> Accounts</h3>
-                    <p>
-                        Account creation is protected with a private token sent only to your Discord webhook. Basic
-                        guides and security steps are provided, while deeper security systems remain hidden for safety.
-                    </p>
-                </div>
-
-                <!-- BOX 2 — FUNCTIONALITY (BIG BOX UNDER BOTH) -->
-                <div class="info-card info-functionality">
-                    <h3><i class="fas fa-cogs"></i> Functionality</h3>
-                    <p>
-                        The website offers a prediction system where users can predict event outcomes, gain
-                        reputation points, and rise in status. Event management is active constantly and prediction
-                        accuracy is calculated based on actual event results.
-                    </p>
-                </div>
-
+    <!-- 🔥 INSERTED CUSTOM POPUP SYSTEM HTML -->
+    <div id="popup-overlay" class="popup-overlay hidden">
+        <div class="popup-dialog">
+            <div class="popup-header">
+                <h3 id="popup-title">Title</h3>
             </div>
+            <div class="popup-body">
+                <p id="popup-message">Message</p>
+                <input id="popup-input" class="popup-input hidden" type="text" autocomplete="off" />
+            </div>
+            <div class="popup-buttons" id="popup-buttons"></div>
         </div>
-
-        <!-- OGWS TAB -->
-        <div id="ogws-tab" class="tab-content">
-            <div class="category-tabs">
-                <div class="category-tab active" data-category="upcoming">Upcoming</div>
-                <div class="category-tab" data-category="active">Active</div>
-                <div class="category-tab" data-category="ended">Ended</div>
-            </div>
-
-            <div id="upcoming-content" class="category-content active">
-                <div id="upcoming-events" class="events-grid"></div>
-            </div>
-
-            <div id="active-content" class="category-content">
-                <div id="active-events" class="events-grid"></div>
-            </div>
-
-            <div id="ended-content" class="category-content">
-                <div id="ended-events" class="events-grid"></div>
-            </div>
-
-        </div>
-
-        <!-- ACCOUNT TAB -->
-        <div id="account-tab" class="tab-content">
-            <div class="account-section">
-                <h3><i class="fas fa-user"></i> Account Info</h3>
-                <div class="account-details">
-                    <div class="detail-item">
-                        <div class="detail-label">Username</div>
-                        <div class="detail-value" id="account-username"></div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Created</div>
-                        <div class="detail-value" id="account-creation-date"></div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Reputation</div>
-                        <div class="detail-value" id="account-reputation"></div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Total Predictions</div>
-                        <div class="detail-value" id="total-bets"></div>
-                    </div>
-                </div>
-
-                <h3><i class="fas fa-chart-line"></i> Predictions</h3>
-                <div id="predictions-list" class="predictions-list"></div>
-
-                <h3><i class="fas fa-key"></i> Token</h3>
-                <button id="change-token-btn" class="btn btn-warning">Regenerate Token</button>
-                <p id="token-status" class="status"></p>
-            </div>
-        </div>
-
-        <!-- ADMIN TAB -->
-        <div id="admin-tab" class="tab-content">
-            <div class="admin-section">
-                <h3><i class="fas fa-tools"></i> Admin Panel</h3>
-
-                <div class="admin-stats">
-                    <div class="admin-stat">
-                        <div id="total-users" class="admin-stat-value">0</div>
-                        <div class="admin-stat-label">Total Users</div>
-                    </div>
-                    <div class="admin-stat">
-                        <div id="total-events" class="admin-stat-value">0</div>
-                        <div class="admin-stat-label">Total Events</div>
-                    </div>
-                    <div class="admin-stat">
-                        <div id="active-bets" class="admin-stat-value">0</div>
-                        <div class="admin-stat-label">Active Predictions</div>
-                    </div>
-                </div>
-
-                <h3><i class="fas fa-user-cog"></i> Accounts</h3>
-                <table class="accounts-table">
-                    <thead>
-                        <tr>
-                            <th>Username</th>
-                            <th>Created</th>
-                            <th>Role</th>
-                        </tr>
-                    </thead>
-                    <tbody id="accounts-table-body"></tbody>
-                </table>
-
-                <h3><i class="fas fa-calendar-plus"></i> Add OGW Event</h3>
-                <div class="event-form">
-                    <input id="event-title" class="form-full-width" type="text" placeholder="Event title">
-                    <input id="team-a" type="text" placeholder="Team A">
-                    <input id="team-b" type="text" placeholder="Team B">
-                    <input id="event-date" type="datetime-local">
-                    <select id="event-category">
-                        <option value="upcoming">Upcoming</option>
-                        <option value="active">Active</option>
-                        <option value="ended">Ended</option>
-                    </select>
-                </div>
-                <button id="add-event-btn" class="btn btn-success">Add Event</button>
-                <p id="event-status" class="status"></p>
-
-                <h3><i class="fas fa-history"></i> Event Log</h3>
-                <button id="clear-event-log-btn" class="btn btn-danger">Clear Log</button>
-                <p id="event-log-status" class="status"></p>
-
-                <div id="event-log-list"></div>
-            </div>
-        </div>
-
     </div>
-</div>
+    <!-- END POPUP SYSTEM -->
 
-<script type="module" src="script.js"></script>
-
+    <script type="module" src="script.js"></script>
 </body>
 </html>
