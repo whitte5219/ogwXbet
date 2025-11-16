@@ -9,8 +9,19 @@ import {
     onValue,
     push,
     set,
-    remove
+    remove,
+    get,
+    update
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+import {
+    getAuth,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    onAuthStateChanged,
+    signOut,
+    updatePassword
+} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
 
 // Firebase config
 const firebaseConfig = {
@@ -26,8 +37,11 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const auth = getAuth(app);
+
 const eventsRef = ref(db, "events");
 const eventLogRef = ref(db, "eventLog");
+const accountsRef = ref(db, "accounts");
 
 // Map of eventId -> firebase key
 window.eventKeyMap = {};
@@ -74,24 +88,6 @@ onValue(eventLogRef, snapshot => {
     }
 });
 
-// Initialize default moderator account if missing
-const initializeData = () => {
-    const whitte4Account = {
-        token: 'Whitte4ModToken123',
-        creationDate: new Date().toISOString(),
-        webhook: 'https://discord.com/api/webhooks/sample',
-        bets: [],
-        predictions: [],
-        reputation: 0,
-        isModerator: true
-    };
-    localStorage.setItem('ogwXbet_Whitte4', JSON.stringify(whitte4Account));
-};
-
-if (!localStorage.getItem('ogwXbet_Whitte4')) {
-    initializeData();
-}
-
 document.addEventListener('DOMContentLoaded', function () {
     const loginPage = document.getElementById('login-page');
     const dashboardPage = document.getElementById('dashboard-page');
@@ -121,6 +117,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const popupInput = document.getElementById('popup-input');
     const popupButtons = document.getElementById('popup-buttons');
 
+    let currentUserUid = null;
+    let currentAccount = null;
+
     function closePopup() {
         if (!popupOverlay) return;
         popupOverlay.classList.remove('active');
@@ -132,7 +131,6 @@ document.addEventListener('DOMContentLoaded', function () {
     function showPopup(options) {
         return new Promise(resolve => {
             if (!popupOverlay || !popupTitle || !popupMessage || !popupButtons) {
-                // Fallback: resolve null if popup not available
                 resolve(null);
                 return;
             }
@@ -157,7 +155,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 popupInput.value = '';
             }
 
-            // Clear previous buttons
             popupButtons.innerHTML = '';
 
             buttons.forEach(btn => {
@@ -165,7 +162,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 b.textContent = btn.text || 'OK';
                 b.classList.add('popup-btn');
                 if (btn.type) {
-                    b.classList.add(btn.type); // 'confirm', 'cancel', etc.
+                    b.classList.add(btn.type); // 'confirm', 'cancel'
                 }
 
                 b.addEventListener('click', () => {
@@ -181,7 +178,6 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             popupOverlay.classList.remove('hidden');
-            // slight delay so CSS transition plays
             requestAnimationFrame(() => {
                 popupOverlay.classList.add('active');
             });
@@ -281,6 +277,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    // ===== ACCOUNT CREATION (NOW USING FIREBASE AUTH + DB) =====
     createAccountBtn.addEventListener('click', async function () {
         const username = document.getElementById('username').value.trim();
         const webhook = document.getElementById('webhook').value.trim();
@@ -297,24 +294,29 @@ document.addEventListener('DOMContentLoaded', function () {
             showStatus('Please enter a valid Discord webhook URL', 'error');
             return;
         }
-        if (localStorage.getItem(`ogwXbet_${username}`)) {
-            showStatus('Username already taken. Please choose a different one.', 'error');
-            return;
-        }
 
+        const email = `${username}@ogwxbet.local`;
         const token = generateToken();
-        const accountData = {
-            token: token,
-            creationDate: new Date().toISOString(),
-            webhook: webhook,
-            bets: [],
-            predictions: [],
-            reputation: 0,
-            isModerator: username === 'Whitte4'
-        };
-        localStorage.setItem(`ogwXbet_${username}`, JSON.stringify(accountData));
 
         try {
+            // Create auth user (email + password = token)
+            const userCredential = await createUserWithEmailAndPassword(auth, email, token);
+            const uid = userCredential.user.uid;
+
+            // Store profile in Realtime Database (NO token stored here)
+            const accountProfile = {
+                username: username,
+                webhook: webhook,
+                creationDate: new Date().toISOString(),
+                bets: [],
+                predictions: [],
+                reputation: 0,
+                isModerator: username === 'Whitte4'
+            };
+
+            await set(ref(db, `accounts/${uid}`), accountProfile);
+
+            // Send token to Discord
             const payload = {
                 content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${token}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**`
             };
@@ -323,22 +325,38 @@ document.addEventListener('DOMContentLoaded', function () {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            if (response.ok) {
-                showStatus('Account created successfully! Token sent to your Discord.', 'success');
-                accountCreationSection.classList.add('hidden');
-                loginSection.classList.remove('hidden');
-                document.getElementById('login-username').value = username;
-                document.getElementById('username').value = '';
-                document.getElementById('webhook').value = '';
+
+            if (!response.ok) {
+                showStatus('Account created, but failed to send token to Discord. Check your webhook.', 'error');
             } else {
-                showStatus('Failed to send token. Please check your webhook URL.', 'error');
+                showStatus('Account created successfully! Token sent to your Discord.', 'success');
             }
+
+            // Sign out after creation so user goes back to login screen
+            try {
+                await signOut(auth);
+            } catch (e) {
+                console.error('Sign-out after creation failed:', e);
+            }
+
+            accountCreationSection.classList.add('hidden');
+            loginSection.classList.remove('hidden');
+            document.getElementById('login-username').value = username;
+            document.getElementById('username').value = '';
+            document.getElementById('webhook').value = '';
+
         } catch (error) {
-            showStatus('Error sending to webhook. Please check your connection.', 'error');
+            console.error('Create account error:', error);
+            if (error.code === 'auth/email-already-in-use') {
+                showStatus('Username already taken. Please choose a different one.', 'error');
+            } else {
+                showStatus('Failed to create account. Please try again later.', 'error');
+            }
         }
     });
 
-    loginBtn.addEventListener('click', function () {
+    // ===== LOGIN (NOW USING FIREBASE AUTH) =====
+    loginBtn.addEventListener('click', async function () {
         const username = document.getElementById('login-username').value.trim();
         const token = document.getElementById('login-token').value.trim();
 
@@ -348,41 +366,38 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const accountData = getAccountData(username);
-        if (!accountData) {
-            loginStatus.textContent = 'Account not found. Please create an account first.';
+        const email = `${username}@ogwxbet.local`;
+
+        try {
+            await signInWithEmailAndPassword(auth, email, token);
+            loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
+            loginStatus.className = 'status success';
+            // onAuthStateChanged (inside checkLoginStatus) will handle dashboard display
+        } catch (error) {
+            console.error('Login error:', error);
+            loginStatus.textContent = 'Invalid username or token. Please try again.';
             loginStatus.className = 'status error';
-            return;
         }
-        if (accountData.token !== token) {
-            loginStatus.textContent = 'Invalid token. Please check and try again.';
-            loginStatus.className = 'status error';
-            return;
-        }
-
-        loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
-        loginStatus.className = 'status success';
-
-        sessionStorage.setItem('ogwXbet_currentUser', username);
-        sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime());
-
-        setTimeout(() => {
-            showDashboard(username, accountData.isModerator);
-        }, 1000);
     });
 
-    logoutBtn.addEventListener('click', function () {
+    logoutBtn.addEventListener('click', async function () {
+        try {
+            await signOut(auth);
+        } catch (e) {
+            console.error('Logout error:', e);
+        }
         sessionStorage.removeItem('ogwXbet_currentUser');
         sessionStorage.removeItem('ogwXbet_loginTime');
+        currentUserUid = null;
+        currentAccount = null;
         showLoginPage();
     });
 
-    // Token regeneration with two options (custom popup)
+    // ===== TOKEN REGENERATION (USING ACCOUNT PROFILE + AUTH PASSWORD) =====
     changeTokenBtn.addEventListener('click', async function () {
-        const username = sessionStorage.getItem('ogwXbet_currentUser');
-        if (!username) return;
-        const accountData = getAccountData(username);
-        if (!accountData) return;
+        if (!currentAccount || !currentUserUid) return;
+        const user = auth.currentUser;
+        if (!user) return;
 
         tokenStatus.textContent = '';
         tokenStatus.className = 'status';
@@ -402,7 +417,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        let targetWebhook = accountData.webhook;
+        let targetWebhook = currentAccount.webhook;
 
         if (choice === 'new') {
             const newWebhook = await showInputPopup(
@@ -421,16 +436,21 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
             targetWebhook = newWebhook;
-            accountData.webhook = newWebhook;
+            currentAccount.webhook = newWebhook;
         }
 
         const newToken = generateToken();
-        accountData.token = newToken;
-        localStorage.setItem(`ogwXbet_${username}`, JSON.stringify(accountData));
 
         try {
+            // Update Firebase Auth password
+            await updatePassword(user, newToken);
+
+            // Update profile in DB (no token stored, just webhook if changed)
+            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+
+            // Send new token to webhook
             const payload = {
-                content: `**New Login Token Generated**\n\nUsername: ${username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**Old token is no longer valid.**`
+                content: `**New Login Token Generated**\n\nUsername: ${currentAccount.username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**Old token is no longer valid.**`
             };
             const response = await fetch(targetWebhook, {
                 method: 'POST',
@@ -442,15 +462,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 tokenStatus.textContent = 'New token generated and sent to Discord.';
                 tokenStatus.className = 'status success';
             } else {
-                tokenStatus.textContent = 'Token updated locally, but sending to Discord failed.';
+                tokenStatus.textContent = 'Token updated, but sending to Discord failed.';
                 tokenStatus.className = 'status error';
             }
         } catch (err) {
-            tokenStatus.textContent = 'Token updated locally, but an error occurred sending to Discord.';
+            console.error('Token regen error:', err);
+            tokenStatus.textContent = 'Failed to update token. Try re-logging and retry.';
             tokenStatus.className = 'status error';
         }
     });
 
+    // ===== EVENT CREATION (unchanged, but uses currentAccount for createdBy) =====
     addEventBtn.addEventListener('click', function () {
         const title = document.getElementById('event-title').value.trim();
         const teamA = document.getElementById('team-a').value.trim();
@@ -474,7 +496,7 @@ document.addEventListener('DOMContentLoaded', function () {
             oddsA: 2.10,
             oddsDraw: 3.25,
             oddsB: 2.80,
-            createdBy: sessionStorage.getItem('ogwXbet_currentUser') || 'Unknown'
+            createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
         };
 
         if (window.saveEventToFirebase) {
@@ -562,22 +584,39 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // Event delegation for moderator 3-dots menu and predictions
-    document.addEventListener('click', function (e) {
-        const menuBtn = e.target.closest('.event-menu');
-        if (menuBtn && isCurrentUserModerator()) {
-            const eventId = menuBtn.getAttribute('data-event-id');
-            handleEventMenu(eventId);
-            return;
-        }
+    // ===== GLOBAL AUTH STATE HANDLER =====
+    function checkLoginStatus() {
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                try {
+                    const uid = user.uid;
+                    const snap = await get(ref(db, `accounts/${uid}`));
+                    if (!snap.exists()) {
+                        currentUserUid = null;
+                        currentAccount = null;
+                        showLoginPage();
+                        return;
+                    }
+                    currentUserUid = uid;
+                    currentAccount = snap.val() || {};
 
-        const predictBtn = e.target.closest('.predict-btn');
-        if (predictBtn) {
-            const eventId = predictBtn.getAttribute('data-event-id');
-            const choice = predictBtn.getAttribute('data-choice'); // "A" or "B"
-            handlePrediction(eventId, choice);
-        }
-    });
+                    sessionStorage.setItem('ogwXbet_currentUser', currentAccount.username || '');
+                    sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime().toString());
+
+                    showDashboard();
+                } catch (e) {
+                    console.error('Failed to load account profile:', e);
+                    currentUserUid = null;
+                    currentAccount = null;
+                    showLoginPage();
+                }
+            } else {
+                currentUserUid = null;
+                currentAccount = null;
+                showLoginPage();
+            }
+        });
+    }
 
     function generateToken() {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -596,49 +635,27 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 5000);
     }
 
-    function getAccountData(username) {
-        try {
-            const data = localStorage.getItem(`ogwXbet_${username}`);
-            return data ? JSON.parse(data) : null;
-        } catch (e) {
-            return null;
-        }
-    }
-
     function isCurrentUserModerator() {
-        const username = sessionStorage.getItem('ogwXbet_currentUser');
-        if (!username) return false;
-        const accountData = getAccountData(username);
-        return !!(accountData && accountData.isModerator);
+        return !!(currentAccount && currentAccount.isModerator);
     }
 
-    function checkLoginStatus() {
-        const currentUser = sessionStorage.getItem('ogwXbet_currentUser');
-        const loginTime = sessionStorage.getItem('ogwXbet_loginTime');
-
-        if (currentUser && loginTime) {
-            const now = new Date().getTime();
-            const sessionDuration = 24 * 60 * 60 * 1000;
-
-            if (now - parseInt(loginTime) < sessionDuration) {
-                const accountData = getAccountData(currentUser);
-                if (accountData) {
-                    showDashboard(currentUser, accountData.isModerator);
-                    return;
-                }
-            }
+    function showDashboard() {
+        if (!currentAccount) {
+            showLoginPage();
+            return;
         }
-        showLoginPage();
-    }
 
-    function showDashboard(username, isModerator) {
         loginPage.style.display = 'none';
         dashboardPage.style.display = 'block';
-        document.getElementById('username-display').textContent = `Welcome, ${username}`;
+        document.getElementById('username-display').textContent =
+            `Welcome, ${currentAccount.username || 'User'}`;
 
-        if (isModerator) {
+        if (currentAccount.isModerator) {
             moderatorBadge.classList.remove('hidden');
             adminNav.classList.remove('hidden');
+        } else {
+            moderatorBadge.classList.add('hidden');
+            adminNav.classList.add('hidden');
         }
 
         loadEvents();
@@ -662,50 +679,58 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function updateAccountInfo() {
-        const username = sessionStorage.getItem('ogwXbet_currentUser');
-        if (!username) return;
-        const accountData = getAccountData(username);
-        if (!accountData) return;
+        if (!currentAccount) return;
 
-        document.getElementById('account-username').textContent = username;
+        document.getElementById('account-username').textContent = currentAccount.username || '-';
         document.getElementById('account-creation-date').textContent =
-            new Date(accountData.creationDate).toLocaleDateString();
-        document.getElementById('total-bets').textContent = accountData.bets ? accountData.bets.length : 0;
+            currentAccount.creationDate ? new Date(currentAccount.creationDate).toLocaleDateString() : '-';
+        document.getElementById('total-bets').textContent =
+            Array.isArray(currentAccount.bets) ? currentAccount.bets.length : 0;
         document.getElementById('winning-rate').textContent = '0%';
 
-        const reputation = typeof accountData.reputation === 'number' ? accountData.reputation : 0;
+        const reputation = typeof currentAccount.reputation === 'number'
+            ? currentAccount.reputation
+            : 0;
         const repEl = document.getElementById('account-reputation');
         if (repEl) {
             repEl.textContent = reputation.toFixed(1);
         }
 
-        renderPredictionsList(accountData);
+        renderPredictionsList(currentAccount);
     }
 
-    function updateAdminInfo() {
+    // Admin info now reads from Firebase /accounts
+    async function updateAdminInfo() {
+        if (!currentAccount || !currentAccount.isModerator) {
+            // Only moderators see admin info
+            return;
+        }
+
         let userCount = 0;
         let accountsHTML = '';
 
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.startsWith('ogwXbet_') && key !== 'ogwXbet_events') {
-                try {
+        try {
+            const snap = await get(accountsRef);
+            if (snap.exists()) {
+                snap.forEach(childSnap => {
                     userCount++;
-                    const username = key.replace('ogwXbet_', '');
-                    const accountData = getAccountData(username);
-                    if (!accountData) continue;
+                    const acc = childSnap.val() || {};
+                    const uname = acc.username || '(unknown)';
+                    const created = acc.creationDate
+                        ? new Date(acc.creationDate).toLocaleDateString()
+                        : '-';
 
                     accountsHTML += `
                         <tr>
-                            <td>${username}</td>
-                            <td>${new Date(accountData.creationDate).toLocaleDateString()}</td>
-                            <td>${accountData.isModerator ? '<span class="moderator-badge">MODERATOR</span>' : 'User'}</td>
+                            <td>${uname}</td>
+                            <td>${created}</td>
+                            <td>${acc.isModerator ? '<span class="moderator-badge">MODERATOR</span>' : 'User'}</td>
                         </tr>
                     `;
-                } catch (error) {
-                    console.log('Skipping invalid account data');
-                }
+                });
             }
+        } catch (err) {
+            console.error('Failed to load accounts for admin panel:', err);
         }
 
         document.getElementById('total-users').textContent = userCount;
@@ -906,6 +931,23 @@ document.addEventListener('DOMContentLoaded', function () {
         container.innerHTML = eventsHTML;
     }
 
+    // Event delegation for moderator 3-dots menu and predictions
+    document.addEventListener('click', function (e) {
+        const menuBtn = e.target.closest('.event-menu');
+        if (menuBtn && isCurrentUserModerator()) {
+            const eventId = menuBtn.getAttribute('data-event-id');
+            handleEventMenu(eventId);
+            return;
+        }
+
+        const predictBtn = e.target.closest('.predict-btn');
+        if (predictBtn) {
+            const eventId = predictBtn.getAttribute('data-event-id');
+            const choice = predictBtn.getAttribute('data-choice'); // "A" or "B"
+            handlePrediction(eventId, choice);
+        }
+    });
+
     // Moderator event menu (custom popup)
     async function handleEventMenu(eventId) {
         const action = await showChoicePopup(
@@ -1026,10 +1068,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const choice = winnerChoice;
         const winnerName = choice === 'A' ? eventObj.teamA : eventObj.teamB;
-        const moderator = sessionStorage.getItem('ogwXbet_currentUser') || 'Unknown';
+        const moderatorName = currentAccount && currentAccount.username ? currentAccount.username : 'Unknown';
 
-        // resolve predictions and reputation
-        resolveEventPredictions(eventObj, choice);
+        // resolve predictions and reputation for all accounts
+        await resolveEventPredictions(eventObj, choice);
 
         // log to eventLog
         const logEntry = {
@@ -1039,7 +1081,7 @@ document.addEventListener('DOMContentLoaded', function () {
             teamB: eventObj.teamB,
             date: eventObj.date,
             winner: winnerName,
-            endedBy: moderator,
+            endedBy: moderatorName,
             endedAt: new Date().toISOString()
         };
 
@@ -1059,50 +1101,53 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function resolveEventPredictions(eventObj, winnerChoice) {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith('ogwXbet_') || key === 'ogwXbet_events') continue;
+    // Resolve predictions for ALL accounts in DB (moderator-only)
+    async function resolveEventPredictions(eventObj, winnerChoice) {
+        try {
+            const snap = await get(accountsRef);
+            if (!snap.exists()) return;
 
-            const username = key.replace('ogwXbet_', '');
-            let accountData = getAccountData(username);
-            if (!accountData || !Array.isArray(accountData.predictions)) continue;
+            const updates = {};
 
-            let changed = false;
-            accountData.predictions.forEach(pred => {
-                if (pred.eventId === eventObj.id && (pred.correct === null || typeof pred.correct === 'undefined')) {
-                    const correct = pred.choice === winnerChoice;
-                    pred.correct = correct;
-                    if (typeof accountData.reputation !== 'number') {
-                        accountData.reputation = 0;
+            snap.forEach(childSnap => {
+                const uid = childSnap.key;
+                const acc = childSnap.val() || {};
+                if (!Array.isArray(acc.predictions)) return;
+
+                let changed = false;
+                acc.predictions.forEach(pred => {
+                    if (pred.eventId === eventObj.id && (pred.correct === null || typeof pred.correct === 'undefined')) {
+                        const correct = pred.choice === winnerChoice;
+                        pred.correct = correct;
+                        if (typeof acc.reputation !== 'number') {
+                            acc.reputation = 0;
+                        }
+                        acc.reputation += correct ? 1 : -0.5;
+                        changed = true;
                     }
-                    accountData.reputation += correct ? 1 : -0.5;
-                    changed = true;
+                });
+
+                if (changed) {
+                    updates[`accounts/${uid}`] = acc;
                 }
             });
 
-            if (changed) {
-                localStorage.setItem(`ogwXbet_${username}`, JSON.stringify(accountData));
+            if (Object.keys(updates).length > 0) {
+                await update(ref(db), updates);
             }
+        } catch (err) {
+            console.error('Failed to resolve predictions:', err);
         }
     }
 
-    // Handle prediction button (custom popup)
+    // Handle prediction button (custom popup) – now stored in Firebase account
     async function handlePrediction(eventId, choice) {
-        const username = sessionStorage.getItem('ogwXbet_currentUser');
-        if (!username) {
+        if (!currentAccount || !currentUserUid) {
             await showMessagePopup(
                 'Login Required',
                 'You must be logged in to make predictions.'
             );
             return;
-        }
-
-        const accountData = getAccountData(username);
-        if (!accountData) return;
-
-        if (!Array.isArray(accountData.predictions)) {
-            accountData.predictions = [];
         }
 
         const eventObj = findEventById(eventId);
@@ -1114,7 +1159,11 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        let existing = accountData.predictions.find(p => p.eventId === eventId);
+        if (!Array.isArray(currentAccount.predictions)) {
+            currentAccount.predictions = [];
+        }
+
+        let existing = currentAccount.predictions.find(p => p.eventId === eventId);
         if (existing) {
             existing.choice = choice;
             existing.correct = null; // reset if event changed
@@ -1122,7 +1171,7 @@ document.addEventListener('DOMContentLoaded', function () {
             existing.teamA = eventObj.teamA;
             existing.teamB = eventObj.teamB;
         } else {
-            accountData.predictions.push({
+            currentAccount.predictions.push({
                 eventId: eventObj.id,
                 title: eventObj.title,
                 teamA: eventObj.teamA,
@@ -1132,7 +1181,12 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
-        localStorage.setItem(`ogwXbet_${username}`, JSON.stringify(accountData));
+        try {
+            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+        } catch (err) {
+            console.error('Failed to save prediction:', err);
+        }
+
         updateAccountInfo();
 
         await showMessagePopup(
