@@ -479,6 +479,10 @@ nav a:hover, nav a.active {
 .event-header {
     padding: 20px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
 }
 
 .event-title {
@@ -490,6 +494,19 @@ nav a:hover, nav a.active {
 .event-date {
     color: var(--text-secondary);
     font-size: 0.9rem;
+}
+
+.event-menu {
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+.event-menu i {
+    font-size: 1.1rem;
+}
+
+.event-menu:hover {
+    color: var(--accent);
 }
 
 .event-body {
@@ -557,6 +574,30 @@ nav a:hover, nav a.active {
 
 .odd:hover .odd-value {
     color: white;
+}
+
+/* prediction buttons under each event */
+.prediction-actions {
+    margin-top: 15px;
+    display: flex;
+    gap: 10px;
+}
+
+.predict-btn {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.predict-btn:hover {
+    background-color: var(--accent);
+    color: #fff;
 }
 
 .account-section {
@@ -693,6 +734,56 @@ nav a:hover, nav a.active {
     color: var(--secondary);
 }
 
+/* Predictions list in account tab */
+.predictions-list {
+    margin-top: 10px;
+}
+
+.prediction-item {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+
+.prediction-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.prediction-event {
+    font-weight: 500;
+}
+
+.prediction-choice {
+    color: var(--text-secondary);
+}
+
+.prediction-status {
+    font-size: 0.85rem;
+    margin-top: 3px;
+}
+
+.prediction-status.pending {
+    color: #ffeb3b;
+}
+
+.prediction-status.correct {
+    color: var(--success);
+}
+
+.prediction-status.wrong {
+    color: var(--danger);
+}
+
+.empty-text {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* Responsive */
 @media (max-width: 768px) {
     .header-content {
         flex-direction: column;
