@@ -989,7 +989,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // Predictions list rendering
+    // ===== FIXED: PREDICTIONS LIST RENDERING - SHOWS ACTUAL STATUS =====
     function renderPredictionsList(accountData) {
         const list = document.getElementById('predictions-list');
         if (!list) return;
@@ -1003,22 +1003,33 @@ document.addEventListener('DOMContentLoaded', function () {
 
         let html = '';
         predictions.forEach(pred => {
-            const status =
-                pred.correct === null || typeof pred.correct === 'undefined'
-                    ? 'pending'
-                    : pred.correct
-                        ? 'correct'
-                        : 'wrong';
+            // FIX: Determine status based on correct field and event status
+            let status = 'pending';
+            let statusLabel = 'Pending';
+            
+            // Check if prediction has been resolved
+            if (pred.correct === true) {
+                status = 'correct';
+                statusLabel = 'Correct';
+            } else if (pred.correct === false) {
+                status = 'wrong';
+                statusLabel = 'Wrong';
+            } else {
+                // If not resolved, check if event exists in ended events
+                const events = window.latestEvents || [];
+                const endedEvent = events.find(ev => ev.id === pred.eventId && ev.category === 'ended');
+                if (endedEvent) {
+                    // Event ended but prediction not resolved - show as pending resolution
+                    status = 'pending';
+                    statusLabel = 'Pending Resolution';
+                } else {
+                    // Event still active/upcoming
+                    status = 'pending';
+                    statusLabel = 'Pending';
+                }
+            }
 
-            const statusLabel =
-                status === 'pending' ? 'Pending'
-                    : status === 'correct' ? 'Correct'
-                        : 'Wrong';
-
-            const choice =
-                pred.choice === 'A'
-                    ? (pred.teamA || 'Team A')
-                    : (pred.teamB || 'Team B');
+            const choice = pred.choice === 'A' ? (pred.teamA || 'Team A') : (pred.teamB || 'Team B');
 
             html += `
                 <div class="prediction-item">
@@ -1327,7 +1338,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== NEW: SMART MOVE FUNCTION WITH REPUTATION =====
+    // ===== FIXED: SMART MOVE FUNCTION WITH PROPER PREDICTION RESOLUTION =====
     async function moveEventSmart(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -1354,6 +1365,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 ]
             );
             if (!winnerChoice) return;
+
+            console.log('Resolving predictions for event:', eventObj.title, 'Winner:', winnerChoice);
 
             // Resolve predictions and award reputation
             await resolveEventPredictions(eventObj, winnerChoice);
@@ -1394,6 +1407,15 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             await set(ref(db, `events/${key}`), eventObj);
             await showMessagePopup('Success', `Event moved to ${newCategory} successfully!`);
+            
+            // FIX: Force refresh account info to show updated prediction status
+            if (currentUserUid) {
+                const snap = await get(ref(db, `accounts/${currentUserUid}`));
+                if (snap.exists()) {
+                    currentAccount = snap.val() || {};
+                    updateAccountInfo();
+                }
+            }
         } catch (err) {
             console.error('Failed to move event:', err);
             await showMessagePopup('Error', 'Failed to move event.');
@@ -1444,7 +1466,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== FIXED: RESOLVE EVENT PREDICTIONS - CORRECTLY COMPARES WINNER =====
+    // ===== FIXED: RESOLVE EVENT PREDICTIONS - PROPERLY COMPARES CHOICES =====
     async function resolveEventPredictions(eventObj, winnerChoice) {
         try {
             const snap = await get(accountsRef);
@@ -1459,15 +1481,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 let changed = false;
                 acc.predictions.forEach(pred => {
+                    // FIX: Check if this prediction is for the current event AND hasn't been resolved yet
                     if (pred.eventId === eventObj.id && (pred.correct === null || typeof pred.correct === 'undefined')) {
-                        // FIX: Properly compare prediction choice with winner choice
-                        const correct = pred.choice === winnerChoice;
+                        // FIX: Ensure we're comparing the same data types
+                        const userChoice = String(pred.choice).toUpperCase();
+                        const actualWinner = String(winnerChoice).toUpperCase();
+                        const correct = userChoice === actualWinner;
+                        
                         pred.correct = correct;
                         if (typeof acc.reputation !== 'number') {
                             acc.reputation = 0;
                         }
                         acc.reputation += correct ? 1 : -0.5;
                         changed = true;
+                        
+                        console.log(`User ${acc.username}: Predicted ${userChoice}, Winner ${actualWinner}, Correct: ${correct}`);
                     }
                 });
 
@@ -1478,13 +1506,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (Object.keys(updates).length > 0) {
                 await update(ref(db), updates);
+                console.log('Updated predictions for', Object.keys(updates).length, 'accounts');
             }
         } catch (err) {
             console.error('Failed to resolve predictions:', err);
         }
     }
 
-    // ===== UPDATED: HANDLE PREDICTION WITH VISUAL FEEDBACK AND SWITCH CONFIRMATION =====
+    // ===== UPDATED: PREDICTION HANDLING WITH VISUAL FEEDBACK =====
     async function handlePrediction(eventId, choice) {
         if (!currentAccount || !currentUserUid) {
             await showMessagePopup(
@@ -1588,6 +1617,37 @@ document.addEventListener('DOMContentLoaded', function () {
                 btn.style.borderColor = 'rgba(255, 255, 255, 0.1)';
             }
         });
+    }
+
+    // ===== ADD: FORCE ACCOUNT REFRESH FUNCTION =====
+    async function refreshAccountData() {
+        if (!currentUserUid) return;
+        
+        try {
+            const snap = await get(ref(db, `accounts/${currentUserUid}`));
+            if (snap.exists()) {
+                currentAccount = snap.val() || {};
+                updateAccountInfo();
+                loadEvents(); // Also refresh events to show updated prediction status
+            }
+        } catch (err) {
+            console.error('Failed to refresh account data:', err);
+        }
+    }
+
+    // ===== ADD: REFRESH BUTTON TO ACCOUNT SECTION =====
+    // Add refresh button to account section
+    const refreshAccountBtn = document.createElement('button');
+    refreshAccountBtn.className = 'btn btn-secondary';
+    refreshAccountBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Predictions';
+    refreshAccountBtn.style.marginTop = '10px';
+    refreshAccountBtn.style.marginLeft = '10px';
+
+    // Insert the refresh button in the account section
+    const accountSection = document.querySelector('#account-tab .account-section:last-child');
+    if (accountSection) {
+        accountSection.appendChild(refreshAccountBtn);
+        refreshAccountBtn.addEventListener('click', refreshAccountData);
     }
 
     // Admin event log renderer (table body)
