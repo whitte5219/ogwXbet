@@ -311,7 +311,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 bets: [],
                 predictions: [],
                 reputation: 0,
-                isModerator: username === 'Whitte4'
+                isModerator: username === 'Whitte4',
+                deleted: false, // NEW: Track deletion status
+                deletedAt: null, // NEW: When deleted
+                deletedBy: null // NEW: Who deleted it
             };
 
             await set(ref(db, `accounts/${uid}`), accountProfile);
@@ -597,8 +600,24 @@ document.addEventListener('DOMContentLoaded', function () {
                         showLoginPage();
                         return;
                     }
+                    
+                    const accountData = snap.val() || {};
+                    
+                    // NEW: Check if account is deleted
+                    if (accountData.deleted === true) {
+                        await showMessagePopup(
+                            'Account Deleted',
+                            'This account has been deleted by moderators. Please contact support if you believe this is a mistake.'
+                        );
+                        await signOut(auth);
+                        currentUserUid = null;
+                        currentAccount = null;
+                        showLoginPage();
+                        return;
+                    }
+                    
                     currentUserUid = uid;
-                    currentAccount = snap.val() || {};
+                    currentAccount = accountData;
 
                     sessionStorage.setItem('ogwXbet_currentUser', currentAccount.username || '');
                     sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime().toString());
@@ -699,34 +718,68 @@ document.addEventListener('DOMContentLoaded', function () {
         renderPredictionsList(currentAccount);
     }
 
-    // Admin info now reads from Firebase /accounts
+    // ===== UPDATED ADMIN INFO - NOW SHOWS ALL ACCOUNTS =====
     async function updateAdminInfo() {
         if (!currentAccount || !currentAccount.isModerator) {
-            // Only moderators see admin info
             return;
         }
 
         let userCount = 0;
-        let accountsHTML = '';
+        let deletedUserCount = 0;
+        let activeAccountsHTML = '';
+        let deletedAccountsHTML = '';
 
         try {
             const snap = await get(accountsRef);
             if (snap.exists()) {
                 snap.forEach(childSnap => {
-                    userCount++;
+                    const uid = childSnap.key;
                     const acc = childSnap.val() || {};
-                    const uname = acc.username || '(unknown)';
-                    const created = acc.creationDate
-                        ? new Date(acc.creationDate).toLocaleDateString()
-                        : '-';
+                    
+                    if (acc.deleted === true) {
+                        deletedUserCount++;
+                        const uname = acc.username || '(unknown)';
+                        const created = acc.creationDate
+                            ? new Date(acc.creationDate).toLocaleDateString()
+                            : '-';
+                        const deletedAt = acc.deletedAt
+                            ? new Date(acc.deletedAt).toLocaleString()
+                            : '-';
+                        const deletedBy = acc.deletedBy || 'Unknown';
 
-                    accountsHTML += `
-                        <tr>
-                            <td>${uname}</td>
-                            <td>${created}</td>
-                            <td>${acc.isModerator ? '<span class="moderator-badge">MODERATOR</span>' : 'User'}</td>
-                        </tr>
-                    `;
+                        deletedAccountsHTML += `
+                            <tr>
+                                <td>${uname}</td>
+                                <td>${created}</td>
+                                <td>${deletedAt}</td>
+                                <td>${deletedBy}</td>
+                                <td>
+                                    <button class="btn-restore-account" data-uid="${uid}" data-username="${uname}">
+                                        <i class="fas fa-undo"></i> Restore
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    } else {
+                        userCount++;
+                        const uname = acc.username || '(unknown)';
+                        const created = acc.creationDate
+                            ? new Date(acc.creationDate).toLocaleDateString()
+                            : '-';
+
+                        activeAccountsHTML += `
+                            <tr>
+                                <td>${uname}</td>
+                                <td>${created}</td>
+                                <td>${acc.isModerator ? '<span class="moderator-badge">MODERATOR</span>' : 'User'}</td>
+                                <td>
+                                    <button class="btn-delete-account" data-uid="${uid}" data-username="${uname}">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    }
                 });
             }
         } catch (err) {
@@ -734,6 +787,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         document.getElementById('total-users').textContent = userCount;
+        document.getElementById('deleted-users').textContent = deletedUserCount;
 
         try {
             const events = window.latestEvents || [];
@@ -744,16 +798,125 @@ document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('active-bets').textContent = '0';
         }
 
+        // Update active accounts table
         document.getElementById('accounts-table-body').innerHTML =
-            accountsHTML ||
+            activeAccountsHTML ||
             `
             <tr>
-                <td colspan="3" style="text-align: center; color: var(--text-secondary);">No accounts found</td>
+                <td colspan="4" style="text-align: center; color: var(--text-secondary);">No active accounts found</td>
             </tr>
         `;
 
+        // Update deleted accounts table
+        document.getElementById('deleted-accounts-table-body').innerHTML =
+            deletedAccountsHTML ||
+            `
+            <tr>
+                <td colspan="5" style="text-align: center; color: var(--text-secondary);">No deleted accounts found</td>
+            </tr>
+        `;
+
+        // Add event listeners for delete/restore buttons
+        document.querySelectorAll('.btn-delete-account').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const uid = this.getAttribute('data-uid');
+                const username = this.getAttribute('data-username');
+                deleteAccount(uid, username);
+            });
+        });
+
+        document.querySelectorAll('.btn-restore-account').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const uid = this.getAttribute('data-uid');
+                const username = this.getAttribute('data-username');
+                restoreAccount(uid, username);
+            });
+        });
+
         if (window.renderEventLog) {
             window.renderEventLog();
+        }
+    }
+
+    // ===== NEW: DELETE ACCOUNT FUNCTION =====
+    async function deleteAccount(uid, username) {
+        if (!isCurrentUserModerator()) return;
+
+        const confirmDelete = await showConfirmPopup(
+            'Delete Account',
+            `Are you sure you want to delete the account "${username}"? This will prevent the user from logging in.`,
+            'Delete Account',
+            'Cancel'
+        );
+
+        if (!confirmDelete) return;
+
+        try {
+            // Mark account as deleted instead of removing it
+            const updates = {
+                deleted: true,
+                deletedAt: new Date().toISOString(),
+                deletedBy: currentAccount.username || 'Unknown Moderator'
+            };
+
+            await update(ref(db, `accounts/${uid}`), updates);
+
+            // Show success message
+            await showMessagePopup(
+                'Account Deleted',
+                `Account "${username}" has been successfully deleted. The user will be logged out if currently active.`
+            );
+
+            // Refresh admin info to show updated tables
+            updateAdminInfo();
+
+        } catch (err) {
+            console.error('Failed to delete account:', err);
+            await showMessagePopup(
+                'Error',
+                'Failed to delete account. Please try again.'
+            );
+        }
+    }
+
+    // ===== NEW: RESTORE ACCOUNT FUNCTION =====
+    async function restoreAccount(uid, username) {
+        if (!isCurrentUserModerator()) return;
+
+        const confirmRestore = await showConfirmPopup(
+            'Restore Account',
+            `Are you sure you want to restore the account "${username}"? The user will be able to log in again.`,
+            'Restore Account',
+            'Cancel'
+        );
+
+        if (!confirmRestore) return;
+
+        try {
+            // Remove deletion markers to restore account
+            const updates = {
+                deleted: false,
+                deletedAt: null,
+                deletedBy: null
+            };
+
+            await update(ref(db, `accounts/${uid}`), updates);
+
+            // Show success message
+            await showMessagePopup(
+                'Account Restored',
+                `Account "${username}" has been successfully restored. The user can now log in again.`
+            );
+
+            // Refresh admin info to show updated tables
+            updateAdminInfo();
+
+        } catch (err) {
+            console.error('Failed to restore account:', err);
+            await showMessagePopup(
+                'Error',
+                'Failed to restore account. Please try again.'
+            );
         }
     }
 
