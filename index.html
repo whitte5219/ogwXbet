@@ -67,10 +67,22 @@
                 </div>
                 
                 <div class="features">
-                    <div class="feature"><i class="fas fa-shield-alt"></i><p>Secure Authentication</p></div>
-                    <div class="feature"><i class="fas fa-bolt"></i><p>Fast Verification</p></div>
-                    <div class="feature"><i class="fas fa-user-lock"></i><p>Unique Usernames</p></div>
-                    <div class="feature"><i class="fas fa-history"></i><p>Session Management</p></div>
+                    <div class="feature">
+                        <i class="fas fa-shield-alt"></i>
+                        <p>Secure Authentication</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-bolt"></i>
+                        <p>Fast Verification</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-user-lock"></i>
+                        <p>Unique Usernames</p>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-history"></i>
+                        <p>Session Management</p>
+                    </div>
                 </div>
                 
                 <div class="switch-form">
@@ -89,6 +101,7 @@
 
     <!-- Dashboard -->
     <div class="dashboard" id="dashboard-page">
+        <!-- Dashboard Header -->
         <header class="dashboard-header">
             <div class="header-content">
                 <div class="logo">
@@ -113,12 +126,11 @@
             </div>
         </header>
 
+        <!-- Main Content -->
         <div class="dashboard-container">
-
-            <!-- INFO TAB -->
+            <!-- Info Tab Content -->
             <div id="info-tab" class="tab-content active">
                 <h2>About ogwXbet</h2>
-
                 <div class="info-grid">
                     <div class="info-card">
                         <h3><i class="fas fa-shield-alt"></i> Secure & Reliable</h3>
@@ -127,73 +139,111 @@
                     
                     <div class="info-card">
                         <h3><i class="fas fa-bolt"></i> Fast Payouts</h3>
-                        <p>We pride ourselves on quick withdrawal processing. Most payouts are completed within 24 hours.</p>
+                        <p>We pride ourselves on our quick withdrawal processing. Most payouts are completed within 24 hours.</p>
                     </div>
                     
                     <div class="info-card">
                         <h3><i class="fas fa-trophy"></i> Predictions</h3>
-                        <p>Predict OGW event outcomes and earn reputation. Predictions are connected to real event results.</p>
+                        <p>The website has a prediction system, where you can try to predict how events end and get reputation, predicting is 100% based on the event.</p>
                     </div>
                     
                     <div class="info-card">
                         <h3><i class="fas fa-headset"></i> 24/7 Support</h3>
-                        <p>Contact our support team anytime at: https://discord.gg/MvzbdQYwUa</p>
+                        <p>You can always contact our customer support team at our discord support server: https://discord.gg/MvzbdQYwUa. </p>
                     </div>
                 </div>
-
+                
                 <div class="stats">
-                    <div class="stat-card"><h2>10,000+</h2><p>Active Users</p></div>
-                    <div class="stat-card"><h2>500+</h2><p>Daily Events</p></div>
-                    <div class="stat-card"><h2>98%</h2><p>Payout Rate</p></div>
-                    <div class="stat-card"><h2>24h</h2><p>Avg. Payout Time</p></div>
+                    <div class="stat-card">
+                        <h2>10,000+</h2>
+                        <p>Active Users</p>
+                    </div>
+                    <div class="stat-card">
+                        <h2>500+</h2>
+                        <p>Daily Events</p>
+                    </div>
+                    <div class="stat-card">
+                        <h2>98%</h2>
+                        <p>Payout Rate</p>
+                    </div>
+                    <div class="stat-card">
+                        <h2>24h</h2>
+                        <p>Avg. Payout Time</p>
+                    </div>
                 </div>
             </div>
 
-            <!-- OGW TAB -->
+            <!-- OGWs Tab Content -->
             <div id="ogws-tab" class="tab-content">
                 <h2>OGW Events</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">Bet on events with competitive odds and instant updates.</p>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Bet on your favorite OGW events with competitive odds and fast payouts.</p>
                 
                 <div class="category-tabs">
                     <div class="category-tab active" data-category="upcoming">Upcoming</div>
                     <div class="category-tab" data-category="active">Active</div>
                     <div class="category-tab" data-category="ended">Ended</div>
                 </div>
-
-                <div id="upcoming-content" class="category-content active"><div class="events-grid" id="upcoming-events"></div></div>
-                <div id="active-content" class="category-content"><div class="events-grid" id="active-events"></div></div>
-                <div id="ended-content" class="category-content"><div class="events-grid" id="ended-events"></div></div>
+                
+                <!-- Upcoming Events -->
+                <div id="upcoming-content" class="category-content active">
+                    <div class="events-grid" id="upcoming-events"></div>
+                </div>
+                
+                <!-- Active Events -->
+                <div id="active-content" class="category-content">
+                    <div class="events-grid" id="active-events"></div>
+                </div>
+                
+                <!-- Ended Events -->
+                <div id="ended-content" class="category-content">
+                    <div class="events-grid" id="ended-events"></div>
+                </div>
             </div>
 
-            <!-- ACCOUNT TAB -->
+            <!-- Account Tab Content -->
             <div id="account-tab" class="tab-content">
                 <h2>Account Settings</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage your account settings and prediction history.</p>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage your account settings and view your betting history.</p>
                 
                 <div class="account-section">
                     <h3><i class="fas fa-user-circle"></i> Account Information</h3>
                     <div class="account-details">
-                        <div class="detail-item"><div class="detail-label">Username</div><div class="detail-value" id="account-username">-</div></div>
-                        <div class="detail-item"><div class="detail-label">Account Created</div><div class="detail-value" id="account-creation-date">-</div></div>
-                        <div class="detail-item"><div class="detail-label">Total Bets</div><div class="detail-value" id="total-bets">0</div></div>
-                        <div class="detail-item"><div class="detail-label">Winning Rate</div><div class="detail-value" id="winning-rate">0%</div></div>
-                        <div class="detail-item"><div class="detail-label">Reputation</div><div class="detail-value" id="account-reputation">0</div></div>
+                        <div class="detail-item">
+                            <div class="detail-label">Username</div>
+                            <div class="detail-value" id="account-username">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Account Created</div>
+                            <div class="detail-value" id="account-creation-date">-</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Total Bets</div>
+                            <div class="detail-value" id="total-bets">0</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Winning Rate</div>
+                            <div class="detail-value" id="winning-rate">0%</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Reputation</div>
+                            <div class="detail-value" id="account-reputation">0</div>
+                        </div>
                     </div>
                 </div>
                 
                 <div class="account-section">
                     <h3><i class="fas fa-key"></i> Security Settings</h3>
-                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Manage your login token.</p>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Manage your login token and security preferences.</p>
                     
                     <div class="warning">
                         <i class="fas fa-exclamation-triangle"></i> 
-                        <strong>Important:</strong> Changing your login token will invalidate your current one.
+                        <strong>Important:</strong> Changing your login token will invalidate your current token.
                     </div>
                     
                     <button class="btn btn-warning" id="change-token-btn" style="margin-top: 20px;">
                         <i class="fas fa-sync-alt"></i> Generate New Login Token
                     </button>
-
+                    
                     <div class="status" id="token-status"></div>
                 </div>
 
@@ -203,23 +253,32 @@
                 </div>
             </div>
 
-            <!-- ADMIN TAB -->
+            <!-- Admin Tab Content -->
             <div id="admin-tab" class="tab-content">
                 <h2>Admin Panel</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage accounts and OGW events.</p>
-
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage platform accounts and OGW events.</p>
+                
                 <div class="admin-section">
                     <h3><i class="fas fa-chart-bar"></i> Platform Statistics</h3>
                     <div class="admin-stats">
-                        <div class="admin-stat"><div class="admin-stat-value" id="total-users">0</div><div class="admin-stat-label">Total Users</div></div>
-                        <div class="admin-stat"><div class="admin-stat-value" id="total-events">0</div><div class="admin-stat-label">Total Events</div></div>
-                        <div class="admin-stat"><div class="admin-stat-value" id="active-bets">0</div><div class="admin-stat-label">Active Bets</div></div>
+                        <div class="admin-stat">
+                            <div class="admin-stat-value" id="total-users">0</div>
+                            <div class="admin-stat-label">Total Users</div>
+                        </div>
+                        <div class="admin-stat">
+                            <div class="admin-stat-value" id="total-events">0</div>
+                            <div class="admin-stat-label">Total Events</div>
+                        </div>
+                        <div class="admin-stat">
+                            <div class="admin-stat-value" id="active-bets">0</div>
+                            <div class="admin-stat-label">Active Bets</div>
+                        </div>
                     </div>
                 </div>
-
+                
                 <div class="admin-section">
                     <h3><i class="fas fa-users"></i> User Accounts</h3>
-                    <p style="margin-bottom: 15px; color: var(--text-secondary);">View all user accounts.</p>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">View all registered user accounts.</p>
                     
                     <div class="accounts-table-container">
                         <table class="accounts-table">
@@ -228,39 +287,16 @@
                                     <th>Username</th>
                                     <th>Account Created</th>
                                     <th>Status</th>
-                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="accounts-table-body"></tbody>
                         </table>
                     </div>
                 </div>
-
-                <!-- 🔥 INSERTED DELETED ACCOUNTS SECTION -->
-                <div class="admin-section" id="deleted-accounts-section">
-                    <h3><i class="fas fa-user-slash"></i> Deleted Accounts</h3>
-                    <p style="margin-bottom: 15px; color: var(--text-secondary);">
-                        Moderators can restore or permanently remove deleted accounts.
-                    </p>
-
-                    <div class="accounts-table-container">
-                        <table class="accounts-table">
-                            <thead>
-                                <tr>
-                                    <th>Username</th>
-                                    <th>Deleted At</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="deleted-accounts-body"></tbody>
-                        </table>
-                    </div>
-                </div>
-                <!-- END INSERT -->
-
+                
                 <div class="admin-section">
                     <h3><i class="fas fa-calendar-plus"></i> Add OGW Event</h3>
-                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Create new events.</p>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Create new OGW events for the platform.</p>
                     
                     <div class="event-form">
                         <div class="form-group form-full-width">
@@ -270,12 +306,12 @@
                         
                         <div class="form-group">
                             <label for="team-a">Team A</label>
-                            <input type="text" id="team-a" placeholder="Team A name">
+                            <input type="text" id="team-a" placeholder="Enter Team A name">
                         </div>
                         
                         <div class="form-group">
                             <label for="team-b">Team B</label>
-                            <input type="text" id="team-b" placeholder="Team B name">
+                            <input type="text" id="team-b" placeholder="Enter Team B name">
                         </div>
                         
                         <div class="form-group">
@@ -302,8 +338,9 @@
 
                 <div class="admin-section">
                     <h3><i class="fas fa-clipboard-list"></i> Event Log</h3>
-                    <p style="margin-bottom: 15px; color: var(--text-secondary);">All ended/deleted events.</p>
-
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">
+                        View all ended/deleted events. This log is only visible to admins.
+                    </p>
                     <div class="accounts-table-container">
                         <table class="accounts-table">
                             <thead>
@@ -317,18 +354,16 @@
                             <tbody id="event-log-body"></tbody>
                         </table>
                     </div>
-
                     <button class="btn btn-danger" id="clear-event-log-btn" style="margin-top: 20px;">
                         <i class="fas fa-trash-alt"></i> Clear Event Log
                     </button>
-
                     <div class="status" id="event-log-status"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- CUSTOM POPUP SYSTEM -->
+    <!-- 🔥 INSERTED CUSTOM POPUP SYSTEM HTML -->
     <div id="popup-overlay" class="popup-overlay hidden">
         <div class="popup-dialog">
             <div class="popup-header">
@@ -341,6 +376,7 @@
             <div class="popup-buttons" id="popup-buttons"></div>
         </div>
     </div>
+    <!-- END POPUP SYSTEM -->
 
     <script type="module" src="script.js"></script>
 </body>
