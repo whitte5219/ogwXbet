@@ -327,7 +327,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== USER PROFILE POPUP SYSTEM =====
+    // ===== UPDATED: USER PROFILE POPUP SYSTEM =====
     function closeUserProfilePopup() {
         if (!userProfilePopup) return;
         userProfilePopup.classList.remove('active');
@@ -353,66 +353,73 @@ document.addEventListener('DOMContentLoaded', function () {
         // Build profile content
         const profileContent = document.getElementById('profile-popup-content');
         profileContent.innerHTML = `
-            <div style="text-align: center; margin-bottom: 20px;">
-                <div style="position: relative; display: inline-block;">
-                    ${profile.picture ? `
-                        <img src="${profile.picture}" 
-                             alt="${userData.username}" 
-                             style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; background: var(--secondary); border: 3px solid var(--accent);">
-                    ` : `
-                        <div style="width: 100px; height: 100px; border-radius: 50%; background: var(--secondary); border: 3px solid var(--accent); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 0.9rem; text-align: center; margin: 0 auto;">
-                            No PFP
-                        </div>
-                    `}
-                </div>
-                <h4 style="margin: 15px 0 5px 0; color: var(--accent);">${userData.username}</h4>
-                <p style="color: var(--text-secondary); font-size: 0.9rem;">
-                    Member since ${userData.creationDate ? new Date(userData.creationDate).toLocaleDateString() : 'Unknown'}
-                </p>
+            <div class="profile-popup-avatar">
+                ${profile.picture ? `
+                    <img src="${profile.picture}" 
+                         alt="${userData.username}" 
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    <div class="profile-popup-avatar-placeholder" style="display: none;">
+                        <i class="fas fa-user"></i>
+                        <div style="font-size: 0.7rem; margin-top: 5px;">No PFP</div>
+                    </div>
+                ` : `
+                    <div class="profile-popup-avatar-placeholder">
+                        <i class="fas fa-user"></i>
+                        <div style="font-size: 0.7rem; margin-top: 5px;">No PFP</div>
+                    </div>
+                `}
+            </div>
+
+            <div class="profile-popup-username">
+                <h4>${userData.username}</h4>
+            </div>
+
+            <div class="profile-popup-join-date">
+                <p>Member since ${userData.creationDate ? new Date(userData.creationDate).toLocaleDateString() : 'Unknown'}</p>
             </div>
 
             ${profile.bio ? `
-                <div style="margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                    <h5 style="margin: 0 0 10px 0; color: var(--text);">About</h5>
-                    <p style="margin: 0; color: var(--text-secondary); line-height: 1.5;">${profile.bio}</p>
+                <div class="profile-popup-bio">
+                    <h5>About</h5>
+                    <p>${profile.bio}</p>
                 </div>
             ` : ''}
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-bottom: 20px;">
-                ${showReputation ? `
-                    <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent); margin-bottom: 5px;">
-                            ${typeof userData.reputation === 'number' ? userData.reputation.toFixed(1) : '0'}
+            ${showReputation || showBets || showPredictions ? `
+                <div class="profile-popup-stats">
+                    ${showReputation ? `
+                        <div class="profile-popup-stat">
+                            <div class="profile-popup-stat-value">
+                                ${typeof userData.reputation === 'number' ? userData.reputation.toFixed(1) : '0'}
+                            </div>
+                            <div class="profile-popup-stat-label">Reputation</div>
                         </div>
-                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Reputation</div>
-                    </div>
-                ` : ''}
-                
-                ${showBets ? `
-                    <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent); margin-bottom: 5px;">
-                            ${Array.isArray(userData.bets) ? userData.bets.length : 0}
+                    ` : ''}
+                    
+                    ${showBets ? `
+                        <div class="profile-popup-stat">
+                            <div class="profile-popup-stat-value">
+                                ${Array.isArray(userData.bets) ? userData.bets.length : 0}
+                            </div>
+                            <div class="profile-popup-stat-label">Total Bets</div>
                         </div>
-                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Total Bets</div>
-                    </div>
-                ` : ''}
-                
-                ${showPredictions ? `
-                    <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent); margin-bottom: 5px;">
-                            ${Array.isArray(userData.predictions) ? userData.predictions.length : 0}
+                    ` : ''}
+                    
+                    ${showPredictions ? `
+                        <div class="profile-popup-stat">
+                            <div class="profile-popup-stat-value">
+                                ${Array.isArray(userData.predictions) ? userData.predictions.length : 0}
+                            </div>
+                            <div class="profile-popup-stat-label">Predictions</div>
                         </div>
-                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Predictions</div>
-                    </div>
-                ` : ''}
-            </div>
-
-            ${!showReputation && !showBets && !showPredictions ? `
-                <div style="text-align: center; padding: 20px; background: rgba(255,255,255,0.03); border-radius: 8px;">
-                    <i class="fas fa-user-shield" style="font-size: 2rem; color: var(--text-secondary); margin-bottom: 10px;"></i>
-                    <p style="color: var(--text-secondary); margin: 0;">This user has chosen to keep their stats private.</p>
+                    ` : ''}
                 </div>
-            ` : ''}
+            ` : `
+                <div class="profile-popup-private">
+                    <i class="fas fa-user-shield"></i>
+                    <p>This user has chosen to keep their stats private.</p>
+                </div>
+            `}
         `;
 
         userProfilePopup.classList.remove('hidden');
@@ -947,7 +954,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== UPDATED: SEARCH FUNCTION WITH 3-COLUMN GRID =====
+    // ===== UPDATED: SEARCH FUNCTION - NO PFP IN SEARCH RESULTS =====
     async function searchUsers() {
         const searchTerm = document.getElementById('user-search').value.trim().toLowerCase();
         const usersGrid = document.getElementById('users-grid');
@@ -978,8 +985,12 @@ document.addEventListener('DOMContentLoaded', function () {
             if (snap.exists()) {
                 snap.forEach(childSnap => {
                     const account = childSnap.val() || {};
-                    // Skip deleted accounts and check if username matches search
-                    if (!account.deleted && account.username && account.username.toLowerCase().includes(searchTerm)) {
+                    // FIXED: Skip deleted accounts and check if username matches search
+                    // Also ensure account has basic required fields
+                    if (!account.deleted && 
+                        account.username && 
+                        account.username.toLowerCase().includes(searchTerm) &&
+                        account.creationDate) {
                         results.push({
                             uid: childSnap.key,
                             ...account
@@ -999,30 +1010,21 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            // Display results in 3-column grid
+            // Display results in 3-column grid - SIMPLIFIED WITHOUT PFP
             let html = '<div class="users-grid-three-column">';
             results.forEach(user => {
-                const profile = user.profile || {};
-                
                 html += `
                     <div class="user-search-card">
-                        <div class="user-search-avatar">
-                            ${profile.picture ? `
-                                <img src="${profile.picture}" 
-                                     alt="${user.username}" 
-                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                <div class="user-avatar-placeholder" style="display: none;">
-                                    No PFP
-                                </div>
-                            ` : `
-                                <div class="user-avatar-placeholder">
-                                    No PFP
-                                </div>
-                            `}
-                        </div>
                         <div class="user-search-info">
-                            <h4>${user.username}</h4>
-                            <p>Joined: ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}</p>
+                            <div class="user-search-header">
+                                <div class="user-avatar-placeholder-search">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div>
+                                    <h4>${user.username}</h4>
+                                    <p>Joined: ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}</p>
+                                </div>
+                            </div>
                             <button class="btn btn-secondary view-profile-btn" data-user-id="${user.uid}">
                                 <i class="fas fa-eye"></i> View Profile
                             </button>
