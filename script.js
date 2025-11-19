@@ -110,6 +110,13 @@ document.addEventListener('DOMContentLoaded', function () {
     const tokenStatus = document.getElementById('token-status');
     const eventLogStatus = document.getElementById('event-log-status');
 
+    // ===== PHASE 1: NEW ELEMENTS =====
+    const updatePictureBtn = document.getElementById('update-picture-btn');
+    const saveProfileBtn = document.getElementById('save-profile-btn');
+    const profileStatus = document.getElementById('profile-status');
+    const searchUserBtn = document.getElementById('search-user-btn');
+    const refreshPredictionsBtn = document.getElementById('refresh-predictions-btn');
+
     // ===== CUSTOM POPUP SYSTEM =====
     const popupOverlay = document.getElementById('popup-overlay');
     const popupTitle = document.getElementById('popup-title');
@@ -249,7 +256,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return result.button;
     }
 
-    // ===== NEW: SHOW FORM POPUP FOR SINGLE-FORM EDITING =====
+    // ===== FORM POPUP FOR SINGLE-FORM EDITING =====
     async function showFormPopup(title, fields, confirmText = 'Save', cancelText = 'Cancel') {
         return new Promise(resolve => {
             if (!popupOverlay || !popupTitle || !popupMessage || !popupButtons) {
@@ -346,7 +353,24 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ===== ACCOUNT CREATION (NOW USING FIREBASE AUTH + DB) =====
+    // ===== PHASE 1: NEW EVENT LISTENERS =====
+    if (updatePictureBtn) {
+        updatePictureBtn.addEventListener('click', updateProfilePicture);
+    }
+
+    if (saveProfileBtn) {
+        saveProfileBtn.addEventListener('click', saveProfileSettings);
+    }
+
+    if (searchUserBtn) {
+        searchUserBtn.addEventListener('click', searchUsers);
+    }
+
+    if (refreshPredictionsBtn) {
+        refreshPredictionsBtn.addEventListener('click', refreshAccountData);
+    }
+
+    // ===== ACCOUNT CREATION (UPDATED WITH PROFILE FIELDS) =====
     createAccountBtn.addEventListener('click', async function () {
         const username = document.getElementById('username').value.trim();
         const webhook = document.getElementById('webhook').value.trim();
@@ -372,7 +396,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const userCredential = await createUserWithEmailAndPassword(auth, email, token);
             const uid = userCredential.user.uid;
 
-            // Store profile in Realtime Database (NO token stored here)
+            // Store profile in Realtime Database (WITH NEW PROFILE FIELDS)
             const accountProfile = {
                 username: username,
                 webhook: webhook,
@@ -381,9 +405,19 @@ document.addEventListener('DOMContentLoaded', function () {
                 predictions: [],
                 reputation: 0,
                 isModerator: username === 'Whitte4',
-                deleted: false, // NEW: Track deletion status
-                deletedAt: null, // NEW: When deleted
-                deletedBy: null // NEW: Who deleted it
+                deleted: false,
+                deletedAt: null,
+                deletedBy: null,
+                // PHASE 1: NEW PROFILE FIELDS
+                profile: {
+                    picture: "", // Will store URL for profile picture
+                    bio: "", // User bio/description
+                    privacy: {
+                        showReputation: true,
+                        showBets: true,
+                        showPredictions: true
+                    }
+                }
             };
 
             await set(ref(db, `accounts/${uid}`), accountProfile);
@@ -427,7 +461,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ===== LOGIN (NOW USING FIREBASE AUTH) =====
+    // ===== LOGIN =====
     loginBtn.addEventListener('click', async function () {
         const username = document.getElementById('login-username').value.trim();
         const token = document.getElementById('login-token').value.trim();
@@ -465,7 +499,7 @@ document.addEventListener('DOMContentLoaded', function () {
         showLoginPage();
     });
 
-    // ===== TOKEN REGENERATION (USING ACCOUNT PROFILE + AUTH PASSWORD) =====
+    // ===== TOKEN REGENERATION =====
     changeTokenBtn.addEventListener('click', async function () {
         if (!currentAccount || !currentUserUid) return;
         const user = auth.currentUser;
@@ -544,7 +578,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ===== EVENT CREATION (UPDATED: REMOVED "ENDED" CATEGORY) =====
+    // ===== EVENT CREATION =====
     addEventBtn.addEventListener('click', function () {
         const title = document.getElementById('event-title').value.trim();
         const teamA = document.getElementById('team-a').value.trim();
@@ -639,6 +673,16 @@ document.addEventListener('DOMContentLoaded', function () {
             if (this.getAttribute('data-tab') === 'ogws') {
                 loadEvents();
             }
+            if (this.getAttribute('data-tab') === 'community') {
+                // Clear previous search results when switching to community tab
+                document.getElementById('users-grid').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-users"></i>
+                        <h3>Search for Users</h3>
+                        <p>Use the search bar above to find other users on the platform.</p>
+                    </div>
+                `;
+            }
         });
     });
 
@@ -672,7 +716,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     
                     const accountData = snap.val() || {};
                     
-                    // NEW: Check if account is deleted
+                    // Check if account is deleted
                     if (accountData.deleted === true) {
                         await showMessagePopup(
                             'Account Deleted',
@@ -704,6 +748,205 @@ document.addEventListener('DOMContentLoaded', function () {
                 showLoginPage();
             }
         });
+    }
+
+    // ===== PHASE 1: NEW PROFILE FUNCTIONS =====
+    function updateProfilePicture() {
+        const pictureUrl = document.getElementById('profile-picture-url').value.trim();
+        const preview = document.getElementById('profile-picture-preview');
+        
+        if (!pictureUrl) {
+            profileStatus.textContent = 'Please enter a picture URL';
+            profileStatus.className = 'status error';
+            return;
+        }
+
+        // Basic URL validation
+        if (!pictureUrl.startsWith('http')) {
+            profileStatus.textContent = 'Please enter a valid URL starting with http:// or https://';
+            profileStatus.className = 'status error';
+            return;
+        }
+
+        // Update preview immediately
+        preview.src = pictureUrl;
+        preview.onerror = function() {
+            profileStatus.textContent = 'Failed to load image from this URL';
+            profileStatus.className = 'status error';
+            preview.src = '';
+        };
+        preview.onload = function() {
+            profileStatus.textContent = 'Picture updated successfully!';
+            profileStatus.className = 'status success';
+            setTimeout(() => {
+                profileStatus.className = 'status';
+            }, 3000);
+        };
+    }
+
+    async function saveProfileSettings() {
+        if (!currentAccount || !currentUserUid) return;
+
+        profileStatus.textContent = '';
+        profileStatus.className = 'status';
+
+        try {
+            // Get current values
+            const pictureUrl = document.getElementById('profile-picture-url').value.trim();
+            const bio = document.getElementById('user-bio').value.trim();
+            const showReputation = document.getElementById('privacy-reputation').checked;
+            const showBets = document.getElementById('privacy-bets').checked;
+            const showPredictions = document.getElementById('privacy-predictions').checked;
+
+            // Update current account object
+            currentAccount.profile = {
+                picture: pictureUrl,
+                bio: bio,
+                privacy: {
+                    showReputation: showReputation,
+                    showBets: showBets,
+                    showPredictions: showPredictions
+                }
+            };
+
+            // Save to Firebase
+            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+
+            profileStatus.textContent = 'Profile settings saved successfully!';
+            profileStatus.className = 'status success';
+
+            setTimeout(() => {
+                profileStatus.className = 'status';
+            }, 3000);
+
+        } catch (err) {
+            console.error('Failed to save profile settings:', err);
+            profileStatus.textContent = 'Failed to save profile settings. Please try again.';
+            profileStatus.className = 'status error';
+        }
+    }
+
+    async function searchUsers() {
+        const searchTerm = document.getElementById('user-search').value.trim().toLowerCase();
+        const usersGrid = document.getElementById('users-grid');
+
+        if (!searchTerm) {
+            usersGrid.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-users"></i>
+                    <h3>Search for Users</h3>
+                    <p>Use the search bar above to find other users on the platform.</p>
+                </div>
+            `;
+            return;
+        }
+
+        usersGrid.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-spinner fa-spin"></i>
+                <h3>Searching...</h3>
+                <p>Looking for users matching "${searchTerm}"</p>
+            </div>
+        `;
+
+        try {
+            const snap = await get(accountsRef);
+            const results = [];
+
+            if (snap.exists()) {
+                snap.forEach(childSnap => {
+                    const account = childSnap.val() || {};
+                    // Skip deleted accounts and check if username matches search
+                    if (!account.deleted && account.username && account.username.toLowerCase().includes(searchTerm)) {
+                        results.push({
+                            uid: childSnap.key,
+                            ...account
+                        });
+                    }
+                });
+            }
+
+            if (results.length === 0) {
+                usersGrid.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-user-times"></i>
+                        <h3>No Users Found</h3>
+                        <p>No users found matching "${searchTerm}"</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Display results
+            let html = '';
+            results.forEach(user => {
+                const profile = user.profile || {};
+                const privacy = profile.privacy || {};
+                
+                // Respect privacy settings
+                const showReputation = privacy.showReputation !== false; // Default to true
+                const showBets = privacy.showBets !== false;
+                const showPredictions = privacy.showPredictions !== false;
+
+                html += `
+                    <div class="user-card" style="background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 15px;">
+                        <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
+                            <img src="${profile.picture || ''}" 
+                                 alt="${user.username}" 
+                                 style="width: 60px; height: 60px; border-radius: 50%; object-fit: cover; background: var(--secondary); border: 2px solid var(--accent);"
+                                 onerror="this.style.display='none'">
+                            <div>
+                                <h4 style="margin: 0; color: var(--accent);">${user.username}</h4>
+                                <p style="margin: 5px 0 0 0; color: var(--text-secondary); font-size: 0.9rem;">
+                                    Member since ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}
+                                </p>
+                            </div>
+                        </div>
+                        
+                        ${profile.bio ? `
+                            <div style="margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                                <p style="margin: 0; font-size: 0.9rem; color: var(--text);">${profile.bio}</p>
+                            </div>
+                        ` : ''}
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; font-size: 0.85rem;">
+                            ${showReputation ? `
+                                <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                                    <div style="font-weight: 600; color: var(--accent);">Reputation</div>
+                                    <div>${typeof user.reputation === 'number' ? user.reputation.toFixed(1) : '0'}</div>
+                                </div>
+                            ` : ''}
+                            
+                            ${showBets ? `
+                                <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                                    <div style="font-weight: 600; color: var(--accent);">Total Bets</div>
+                                    <div>${Array.isArray(user.bets) ? user.bets.length : 0}</div>
+                                </div>
+                            ` : ''}
+                            
+                            ${showPredictions ? `
+                                <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                                    <div style="font-weight: 600; color: var(--accent);">Predictions</div>
+                                    <div>${Array.isArray(user.predictions) ? user.predictions.length : 0}</div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+
+            usersGrid.innerHTML = html;
+
+        } catch (err) {
+            console.error('Failed to search users:', err);
+            usersGrid.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <h3>Search Failed</h3>
+                    <p>Unable to search users at this time. Please try again later.</p>
+                </div>
+            `;
+        }
     }
 
     function generateToken() {
@@ -766,6 +1009,7 @@ document.addEventListener('DOMContentLoaded', function () {
         loginSection.classList.remove('hidden');
     }
 
+    // ===== UPDATED: UPDATE ACCOUNT INFO WITH PROFILE FIELDS =====
     function updateAccountInfo() {
         if (!currentAccount) return;
 
@@ -784,10 +1028,39 @@ document.addEventListener('DOMContentLoaded', function () {
             repEl.textContent = reputation.toFixed(1);
         }
 
+        // PHASE 1: Populate profile fields
+        const profile = currentAccount.profile || {};
+        const privacy = profile.privacy || {};
+
+        // Profile picture
+        const picturePreview = document.getElementById('profile-picture-preview');
+        const pictureUrlInput = document.getElementById('profile-picture-url');
+        if (picturePreview && profile.picture) {
+            picturePreview.src = profile.picture;
+        }
+        if (pictureUrlInput) {
+            pictureUrlInput.value = profile.picture || '';
+        }
+
+        // Bio
+        const bioInput = document.getElementById('user-bio');
+        if (bioInput) {
+            bioInput.value = profile.bio || '';
+        }
+
+        // Privacy settings
+        const reputationCheckbox = document.getElementById('privacy-reputation');
+        const betsCheckbox = document.getElementById('privacy-bets');
+        const predictionsCheckbox = document.getElementById('privacy-predictions');
+        
+        if (reputationCheckbox) reputationCheckbox.checked = privacy.showReputation !== false;
+        if (betsCheckbox) betsCheckbox.checked = privacy.showBets !== false;
+        if (predictionsCheckbox) predictionsCheckbox.checked = privacy.showPredictions !== false;
+
         renderPredictionsList(currentAccount);
     }
 
-    // ===== UPDATED ADMIN INFO - NOW SHOWS ALL ACCOUNTS =====
+    // ===== UPDATED ADMIN INFO =====
     async function updateAdminInfo() {
         if (!currentAccount || !currentAccount.isModerator) {
             return;
@@ -907,7 +1180,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== NEW: DELETE ACCOUNT FUNCTION =====
+    // ===== DELETE ACCOUNT FUNCTION =====
     async function deleteAccount(uid, username) {
         if (!isCurrentUserModerator()) return;
 
@@ -948,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== NEW: RESTORE ACCOUNT FUNCTION =====
+    // ===== RESTORE ACCOUNT FUNCTION =====
     async function restoreAccount(uid, username) {
         if (!isCurrentUserModerator()) return;
 
@@ -989,7 +1262,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== FIXED: PREDICTIONS LIST RENDERING - SHOWS ACTUAL STATUS =====
+    // ===== PREDICTIONS LIST RENDERING =====
     function renderPredictionsList(accountData) {
         const list = document.getElementById('predictions-list');
         if (!list) return;
@@ -1003,7 +1276,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         let html = '';
         predictions.forEach(pred => {
-            // FIX: Determine status based on correct field and event status
+            // Determine status based on correct field and event status
             let status = 'pending';
             let statusLabel = 'Pending';
             
@@ -1047,7 +1320,7 @@ document.addEventListener('DOMContentLoaded', function () {
         list.innerHTML = html;
     }
 
-    // ===== UPDATED: DISPLAY EVENTS WITH PREDICTION STATUS =====
+    // ===== DISPLAY EVENTS WITH PREDICTION STATUS =====
     window.displayFirebaseEvents = function (events) {
         document.getElementById('upcoming-events').innerHTML = '';
         document.getElementById('active-events').innerHTML = '';
@@ -1113,7 +1386,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== UPDATED: DISPLAY EVENTS WITH VISUAL PREDICTION STATES =====
+    // ===== DISPLAY EVENTS WITH VISUAL PREDICTION STATES =====
     function displayEvents(events, container, category) {
         if (!events || events.length === 0) return;
         const isMod = isCurrentUserModerator();
@@ -1222,7 +1495,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ===== UPDATED: EVENT MENU WITH 3 OPTIONS =====
+    // ===== EVENT MENU WITH 3 OPTIONS =====
     async function handleEventMenu(eventId) {
         const action = await showChoicePopup(
             'Event Actions',
@@ -1249,7 +1522,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return events.find(ev => ev.id === eventId);
     }
 
-    // ===== NEW: SINGLE-FORM EDIT FUNCTION =====
+    // ===== SINGLE-FORM EDIT FUNCTION =====
     async function editEventFull(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -1338,7 +1611,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== FIXED: SMART MOVE FUNCTION WITH PROPER PREDICTION RESOLUTION =====
+    // ===== SMART MOVE FUNCTION WITH PROPER PREDICTION RESOLUTION =====
     async function moveEventSmart(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -1408,7 +1681,7 @@ document.addEventListener('DOMContentLoaded', function () {
             await set(ref(db, `events/${key}`), eventObj);
             await showMessagePopup('Success', `Event moved to ${newCategory} successfully!`);
             
-            // FIX: Force refresh account info to show updated prediction status
+            // Force refresh account info to show updated prediction status
             if (currentUserUid) {
                 const snap = await get(ref(db, `accounts/${currentUserUid}`));
                 if (snap.exists()) {
@@ -1422,7 +1695,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== NEW: DELETE EVENT FUNCTION =====
+    // ===== DELETE EVENT FUNCTION =====
     async function deleteEvent(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -1466,7 +1739,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== FIXED: RESOLVE EVENT PREDICTIONS - PROPERLY COMPARES CHOICES =====
+    // ===== RESOLVE EVENT PREDICTIONS - PROPERLY COMPARES CHOICES =====
     async function resolveEventPredictions(eventObj, winnerChoice) {
         try {
             const snap = await get(accountsRef);
@@ -1481,9 +1754,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 let changed = false;
                 acc.predictions.forEach(pred => {
-                    // FIX: Check if this prediction is for the current event AND hasn't been resolved yet
+                    // Check if this prediction is for the current event AND hasn't been resolved yet
                     if (pred.eventId === eventObj.id && (pred.correct === null || typeof pred.correct === 'undefined')) {
-                        // FIX: Ensure we're comparing the same data types
+                        // Ensure we're comparing the same data types
                         const userChoice = String(pred.choice).toUpperCase();
                         const actualWinner = String(winnerChoice).toUpperCase();
                         const correct = userChoice === actualWinner;
@@ -1513,7 +1786,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== UPDATED: PREDICTION HANDLING WITH VISUAL FEEDBACK =====
+    // ===== PREDICTION HANDLING WITH VISUAL FEEDBACK =====
     async function handlePrediction(eventId, choice) {
         if (!currentAccount || !currentUserUid) {
             await showMessagePopup(
@@ -1594,11 +1867,9 @@ document.addEventListener('DOMContentLoaded', function () {
         // Update the UI to show which button is selected
         updatePredictionButtons(eventId, choice);
         updateAccountInfo();
-        
-        // Removed the "Prediction Saved" popup as requested
     }
 
-    // ===== NEW: UPDATE PREDICTION BUTTONS VISUALLY =====
+    // ===== UPDATE PREDICTION BUTTONS VISUALLY =====
     function updatePredictionButtons(eventId, selectedChoice) {
         // Find all prediction buttons for this event
         const predictBtns = document.querySelectorAll(`.predict-btn[data-event-id="${eventId}"]`);
@@ -1619,7 +1890,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== ADD: FORCE ACCOUNT REFRESH FUNCTION =====
+    // ===== FORCE ACCOUNT REFRESH FUNCTION =====
     async function refreshAccountData() {
         if (!currentUserUid) return;
         
@@ -1629,25 +1900,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 currentAccount = snap.val() || {};
                 updateAccountInfo();
                 loadEvents(); // Also refresh events to show updated prediction status
+                
+                // Show success message
+                if (profileStatus) {
+                    profileStatus.textContent = 'Account data refreshed successfully!';
+                    profileStatus.className = 'status success';
+                    setTimeout(() => {
+                        profileStatus.className = 'status';
+                    }, 3000);
+                }
             }
         } catch (err) {
             console.error('Failed to refresh account data:', err);
+            if (profileStatus) {
+                profileStatus.textContent = 'Failed to refresh data. Please try again.';
+                profileStatus.className = 'status error';
+            }
         }
-    }
-
-    // ===== ADD: REFRESH BUTTON TO ACCOUNT SECTION =====
-    // Add refresh button to account section
-    const refreshAccountBtn = document.createElement('button');
-    refreshAccountBtn.className = 'btn btn-secondary';
-    refreshAccountBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Predictions';
-    refreshAccountBtn.style.marginTop = '10px';
-    refreshAccountBtn.style.marginLeft = '10px';
-
-    // Insert the refresh button in the account section
-    const accountSection = document.querySelector('#account-tab .account-section:last-child');
-    if (accountSection) {
-        accountSection.appendChild(refreshAccountBtn);
-        refreshAccountBtn.addEventListener('click', refreshAccountData);
     }
 
     // Admin event log renderer (table body)
