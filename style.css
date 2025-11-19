@@ -110,7 +110,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
     width: 100%;
     padding: 12px 15px;
     background-color: rgba(255, 255, 255, 0.08);
@@ -122,13 +123,15 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
 }
 
-input::placeholder {
+input::placeholder,
+textarea::placeholder {
     color: var(--text-secondary);
 }
 
@@ -181,7 +184,53 @@ input::placeholder {
     background: linear-gradient(to right, var(--danger), #d32f2f);
 }
 
-/* ===== NEW: DELETE & RESTORE BUTTON STYLES ===== */
+/* ===== NEW: TOGGLE SWITCH STYLES ===== */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.2);
+    transition: var(--transition);
+    border-radius: 24px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: var(--transition);
+    border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+    background-color: var(--success);
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+/* ===== DELETE & RESTORE BUTTON STYLES ===== */
 .btn-delete-account {
     background: linear-gradient(to right, var(--danger), #d32f2f);
     color: white;
@@ -633,7 +682,7 @@ nav a.active {
     color: white;
 }
 
-/* prediction buttons */
+/* ===== PREDICTION BUTTONS ===== */
 .prediction-actions {
     margin-top: 15px;
     display: flex;
@@ -657,7 +706,7 @@ nav a.active {
     color: #fff;
 }
 
-/* ===== NEW: PREDICTION RESULT STYLING ===== */
+/* ===== PREDICTION RESULT STYLING ===== */
 .prediction-result {
     margin-top: 10px;
     padding: 10px;
@@ -679,7 +728,30 @@ nav a.active {
     color: #f44336;
 }
 
-/* account page */
+/* ===== USER CARDS FOR COMMUNITY TAB ===== */
+.user-card {
+    background-color: var(--card-bg);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 15px;
+    box-shadow: var(--shadow);
+    transition: var(--transition);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.user-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+    border-color: rgba(74, 144, 226, 0.3);
+}
+
+.users-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* ===== ACCOUNT PAGE STYLES ===== */
 .account-section {
     background-color: var(--card-bg);
     border-radius: 12px;
@@ -724,8 +796,41 @@ nav a.active {
     font-weight: 500;
 }
 
-/* admin panel */
+/* ===== PROFILE PICTURE STYLES ===== */
+.profile-picture-section {
+    margin-bottom: 20px;
+}
 
+.current-avatar {
+    margin-bottom: 15px;
+}
+
+.current-avatar img {
+    border: 2px solid var(--accent);
+}
+
+/* ===== PRIVACY SETTINGS STYLES ===== */
+.privacy-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    transition: var(--transition);
+}
+
+.privacy-option:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.privacy-option div:first-child {
+    flex: 1;
+    margin-right: 15px;
+}
+
+/* ===== ADMIN PANEL STYLES ===== */
 .admin-section {
     background-color: var(--card-bg);
     border-radius: 12px;
@@ -795,7 +900,7 @@ nav a.active {
     background-color: rgba(255, 255, 255, 0.03);
 }
 
-/* ===== NEW: DELETED ACCOUNTS TABLE STYLING ===== */
+/* ===== DELETED ACCOUNTS TABLE STYLING ===== */
 .accounts-table .deleted-row {
     opacity: 0.7;
     background-color: rgba(244, 67, 54, 0.05);
@@ -831,7 +936,7 @@ nav a.active {
     color: var(--secondary);
 }
 
-/* predictions */
+/* ===== PREDICTIONS STYLES ===== */
 .predictions-list {
     margin-top: 10px;
 }
@@ -842,6 +947,13 @@ nav a.active {
     padding: 10px 12px;
     margin-bottom: 8px;
     font-size: 0.9rem;
+    border-left: 4px solid var(--secondary);
+    transition: var(--transition);
+}
+
+.prediction-item:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-left-color: var(--accent);
 }
 
 .prediction-header {
@@ -861,6 +973,7 @@ nav a.active {
 .prediction-status {
     font-size: 0.85rem;
     margin-top: 3px;
+    font-weight: 500;
 }
 
 .prediction-status.pending {
@@ -878,12 +991,11 @@ nav a.active {
 .empty-text {
     color: var(--text-secondary);
     font-size: 0.9rem;
+    text-align: center;
+    padding: 20px;
 }
 
-/* =========================================================
-   CUSTOM POPUP SYSTEM
-   ========================================================= */
-
+/* ===== CUSTOM POPUP SYSTEM ===== */
 .popup-overlay {
     position: fixed;
     inset: 0;
@@ -980,7 +1092,7 @@ nav a.active {
     border-color: var(--danger);
 }
 
-/* ===== NEW: ACTION BUTTONS IN TABLES ===== */
+/* ===== ACTION BUTTONS IN TABLES ===== */
 .accounts-table .actions-cell {
     text-align: center;
     width: 120px;
@@ -992,7 +1104,7 @@ nav a.active {
     justify-content: center;
 }
 
-/* ===== NEW: DELETED ACCOUNTS SECTION STYLING ===== */
+/* ===== DELETED ACCOUNTS SECTION STYLING ===== */
 .deleted-accounts-section {
     border-left: 4px solid var(--danger);
 }
@@ -1005,7 +1117,26 @@ nav a.active {
     color: var(--danger);
 }
 
-/* responsive */
+/* ===== SEARCH SECTION STYLES ===== */
+.search-section {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 25px;
+}
+
+.search-section .form-group {
+    margin-bottom: 0;
+}
+
+/* ===== COMMUNITY TAB STYLES ===== */
+#community-tab .empty-state {
+    background: var(--card-bg);
+    border-radius: 12px;
+    margin: 20px 0;
+}
+
+/* ===== RESPONSIVE DESIGN ===== */
 @media (max-width: 768px) {
     .header-content {
         flex-direction: column;
@@ -1014,6 +1145,8 @@ nav a.active {
 
     nav ul {
         gap: 15px;
+        flex-wrap: wrap;
+        justify-content: center;
     }
 
     .stats {
@@ -1045,7 +1178,22 @@ nav a.active {
         grid-template-columns: 1fr;
     }
 
-    /* ===== NEW: MOBILE STYLES FOR ACTION BUTTONS ===== */
+    .profile-picture-section {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .privacy-option {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .privacy-option div:first-child {
+        margin-right: 0;
+    }
+
+    /* ===== MOBILE STYLES FOR ACTION BUTTONS ===== */
     .accounts-table {
         font-size: 0.85rem;
     }
@@ -1063,6 +1211,21 @@ nav a.active {
 
     .accounts-table .actions-cell {
         width: 100px;
+    }
+
+    .prediction-header {
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    .user-card {
+        padding: 15px;
+    }
+
+    .user-card > div:first-child {
+        flex-direction: column;
+        text-align: center;
+        gap: 10px;
     }
 }
 
@@ -1082,4 +1245,67 @@ nav a.active {
     .accounts-table .actions-cell {
         width: 90px;
     }
+
+    .card {
+        padding: 20px;
+    }
+
+    .account-section {
+        padding: 20px;
+    }
+
+    .admin-section {
+        padding: 20px;
+    }
+
+    .popup-dialog {
+        padding: 18px;
+    }
+
+    .popup-buttons {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .popup-btn {
+        width: 100%;
+    }
+}
+
+/* ===== ANIMATIONS ===== */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.user-card {
+    animation: slideIn 0.3s ease;
+}
+
+.prediction-item {
+    animation: slideIn 0.2s ease;
+}
+
+/* ===== SCROLLBAR STYLING ===== */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-dark);
 }
