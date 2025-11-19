@@ -116,6 +116,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const profileStatus = document.getElementById('profile-status');
     const searchUserBtn = document.getElementById('search-user-btn');
     const refreshPredictionsBtn = document.getElementById('refresh-predictions-btn');
+    const closeProfilePopup = document.getElementById('close-profile-popup');
+    const userProfilePopup = document.getElementById('user-profile-popup');
 
     // ===== CUSTOM POPUP SYSTEM =====
     const popupOverlay = document.getElementById('popup-overlay');
@@ -325,6 +327,100 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // ===== USER PROFILE POPUP SYSTEM =====
+    function closeUserProfilePopup() {
+        if (!userProfilePopup) return;
+        userProfilePopup.classList.remove('active');
+        setTimeout(() => {
+            userProfilePopup.classList.add('hidden');
+        }, 200);
+    }
+
+    function openUserProfilePopup(userData) {
+        if (!userProfilePopup) return;
+        
+        const profile = userData.profile || {};
+        const privacy = profile.privacy || {};
+        
+        // Respect privacy settings
+        const showReputation = privacy.showReputation !== false;
+        const showBets = privacy.showBets !== false;
+        const showPredictions = privacy.showPredictions !== false;
+
+        // Set username in popup header
+        document.getElementById('profile-popup-username').textContent = userData.username || 'User Profile';
+        
+        // Build profile content
+        const profileContent = document.getElementById('profile-popup-content');
+        profileContent.innerHTML = `
+            <div style="text-align: center; margin-bottom: 20px;">
+                <div style="position: relative; display: inline-block;">
+                    ${profile.picture ? `
+                        <img src="${profile.picture}" 
+                             alt="${userData.username}" 
+                             style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; background: var(--secondary); border: 3px solid var(--accent);">
+                    ` : `
+                        <div style="width: 100px; height: 100px; border-radius: 50%; background: var(--secondary); border: 3px solid var(--accent); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 0.9rem; text-align: center; margin: 0 auto;">
+                            No PFP
+                        </div>
+                    `}
+                </div>
+                <h4 style="margin: 15px 0 5px 0; color: var(--accent);">${userData.username}</h4>
+                <p style="color: var(--text-secondary); font-size: 0.9rem;">
+                    Member since ${userData.creationDate ? new Date(userData.creationDate).toLocaleDateString() : 'Unknown'}
+                </p>
+            </div>
+
+            ${profile.bio ? `
+                <div style="margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                    <h5 style="margin: 0 0 10px 0; color: var(--text);">About</h5>
+                    <p style="margin: 0; color: var(--text-secondary); line-height: 1.5;">${profile.bio}</p>
+                </div>
+            ` : ''}
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                ${showReputation ? `
+                    <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent); margin-bottom: 5px;">
+                            ${typeof userData.reputation === 'number' ? userData.reputation.toFixed(1) : '0'}
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Reputation</div>
+                    </div>
+                ` : ''}
+                
+                ${showBets ? `
+                    <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent); margin-bottom: 5px;">
+                            ${Array.isArray(userData.bets) ? userData.bets.length : 0}
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Total Bets</div>
+                    </div>
+                ` : ''}
+                
+                ${showPredictions ? `
+                    <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--accent); margin-bottom: 5px;">
+                            ${Array.isArray(userData.predictions) ? userData.predictions.length : 0}
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Predictions</div>
+                    </div>
+                ` : ''}
+            </div>
+
+            ${!showReputation && !showBets && !showPredictions ? `
+                <div style="text-align: center; padding: 20px; background: rgba(255,255,255,0.03); border-radius: 8px;">
+                    <i class="fas fa-user-shield" style="font-size: 2rem; color: var(--text-secondary); margin-bottom: 10px;"></i>
+                    <p style="color: var(--text-secondary); margin: 0;">This user has chosen to keep their stats private.</p>
+                </div>
+            ` : ''}
+        `;
+
+        userProfilePopup.classList.remove('hidden');
+        requestAnimationFrame(() => {
+            userProfilePopup.classList.add('active');
+        });
+    }
+
     // ===============================
 
     checkLoginStatus();
@@ -368,6 +464,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (refreshPredictionsBtn) {
         refreshPredictionsBtn.addEventListener('click', refreshAccountData);
+    }
+
+    if (closeProfilePopup) {
+        closeProfilePopup.addEventListener('click', closeUserProfilePopup);
+    }
+
+    // Close profile popup when clicking outside
+    if (userProfilePopup) {
+        userProfilePopup.addEventListener('click', function(e) {
+            if (e.target === userProfilePopup) {
+                closeUserProfilePopup();
+            }
+        });
     }
 
     // ===== ACCOUNT CREATION (UPDATED WITH PROFILE FIELDS) =====
@@ -750,14 +859,21 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== PHASE 1: NEW PROFILE FUNCTIONS =====
+    // ===== PHASE 1: UPDATED PROFILE FUNCTIONS =====
     function updateProfilePicture() {
         const pictureUrl = document.getElementById('profile-picture-url').value.trim();
         const preview = document.getElementById('profile-picture-preview');
+        const placeholder = document.getElementById('profile-picture-placeholder');
         
         if (!pictureUrl) {
-            profileStatus.textContent = 'Please enter a picture URL';
-            profileStatus.className = 'status error';
+            // No URL - show placeholder
+            preview.style.display = 'none';
+            placeholder.style.display = 'flex';
+            profileStatus.textContent = 'Picture removed. Using placeholder.';
+            profileStatus.className = 'status info';
+            setTimeout(() => {
+                profileStatus.className = 'status';
+            }, 3000);
             return;
         }
 
@@ -768,20 +884,25 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        // Update preview immediately
-        preview.src = pictureUrl;
+        // Update preview
         preview.onerror = function() {
-            profileStatus.textContent = 'Failed to load image from this URL';
+            preview.style.display = 'none';
+            placeholder.style.display = 'flex';
+            profileStatus.textContent = 'Failed to load image from this URL. Using placeholder.';
             profileStatus.className = 'status error';
-            preview.src = '';
         };
+        
         preview.onload = function() {
+            preview.style.display = 'block';
+            placeholder.style.display = 'none';
             profileStatus.textContent = 'Picture updated successfully!';
             profileStatus.className = 'status success';
             setTimeout(() => {
                 profileStatus.className = 'status';
             }, 3000);
         };
+        
+        preview.src = pictureUrl;
     }
 
     async function saveProfileSettings() {
@@ -826,6 +947,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    // ===== UPDATED: SEARCH FUNCTION WITH 3-COLUMN GRID =====
     async function searchUsers() {
         const searchTerm = document.getElementById('user-search').value.trim().toLowerCase();
         const usersGrid = document.getElementById('users-grid');
@@ -877,65 +999,51 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            // Display results
-            let html = '';
+            // Display results in 3-column grid
+            let html = '<div class="users-grid-three-column">';
             results.forEach(user => {
                 const profile = user.profile || {};
-                const privacy = profile.privacy || {};
                 
-                // Respect privacy settings
-                const showReputation = privacy.showReputation !== false; // Default to true
-                const showBets = privacy.showBets !== false;
-                const showPredictions = privacy.showPredictions !== false;
-
                 html += `
-                    <div class="user-card" style="background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 15px;">
-                        <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
-                            <img src="${profile.picture || ''}" 
-                                 alt="${user.username}" 
-                                 style="width: 60px; height: 60px; border-radius: 50%; object-fit: cover; background: var(--secondary); border: 2px solid var(--accent);"
-                                 onerror="this.style.display='none'">
-                            <div>
-                                <h4 style="margin: 0; color: var(--accent);">${user.username}</h4>
-                                <p style="margin: 5px 0 0 0; color: var(--text-secondary); font-size: 0.9rem;">
-                                    Member since ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}
-                                </p>
-                            </div>
+                    <div class="user-search-card">
+                        <div class="user-search-avatar">
+                            ${profile.picture ? `
+                                <img src="${profile.picture}" 
+                                     alt="${user.username}" 
+                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                <div class="user-avatar-placeholder" style="display: none;">
+                                    No PFP
+                                </div>
+                            ` : `
+                                <div class="user-avatar-placeholder">
+                                    No PFP
+                                </div>
+                            `}
                         </div>
-                        
-                        ${profile.bio ? `
-                            <div style="margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px;">
-                                <p style="margin: 0; font-size: 0.9rem; color: var(--text);">${profile.bio}</p>
-                            </div>
-                        ` : ''}
-                        
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; font-size: 0.85rem;">
-                            ${showReputation ? `
-                                <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
-                                    <div style="font-weight: 600; color: var(--accent);">Reputation</div>
-                                    <div>${typeof user.reputation === 'number' ? user.reputation.toFixed(1) : '0'}</div>
-                                </div>
-                            ` : ''}
-                            
-                            ${showBets ? `
-                                <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
-                                    <div style="font-weight: 600; color: var(--accent);">Total Bets</div>
-                                    <div>${Array.isArray(user.bets) ? user.bets.length : 0}</div>
-                                </div>
-                            ` : ''}
-                            
-                            ${showPredictions ? `
-                                <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
-                                    <div style="font-weight: 600; color: var(--accent);">Predictions</div>
-                                    <div>${Array.isArray(user.predictions) ? user.predictions.length : 0}</div>
-                                </div>
-                            ` : ''}
+                        <div class="user-search-info">
+                            <h4>${user.username}</h4>
+                            <p>Joined: ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}</p>
+                            <button class="btn btn-secondary view-profile-btn" data-user-id="${user.uid}">
+                                <i class="fas fa-eye"></i> View Profile
+                            </button>
                         </div>
                     </div>
                 `;
             });
+            html += '</div>';
 
             usersGrid.innerHTML = html;
+
+            // Add event listeners to view profile buttons
+            document.querySelectorAll('.view-profile-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const userId = this.getAttribute('data-user-id');
+                    const userData = results.find(user => user.uid === userId);
+                    if (userData) {
+                        openUserProfilePopup(userData);
+                    }
+                });
+            });
 
         } catch (err) {
             console.error('Failed to search users:', err);
@@ -1032,13 +1140,20 @@ document.addEventListener('DOMContentLoaded', function () {
         const profile = currentAccount.profile || {};
         const privacy = profile.privacy || {};
 
-        // Profile picture
+        // Profile picture - handle placeholder
         const picturePreview = document.getElementById('profile-picture-preview');
+        const placeholder = document.getElementById('profile-picture-placeholder');
         const pictureUrlInput = document.getElementById('profile-picture-url');
-        if (picturePreview && profile.picture) {
-            picturePreview.src = profile.picture;
-        }
-        if (pictureUrlInput) {
+        
+        if (picturePreview && placeholder && pictureUrlInput) {
+            if (profile.picture) {
+                picturePreview.src = profile.picture;
+                picturePreview.style.display = 'block';
+                placeholder.style.display = 'none';
+            } else {
+                picturePreview.style.display = 'none';
+                placeholder.style.display = 'flex';
+            }
             pictureUrlInput.value = profile.picture || '';
         }
 
