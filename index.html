@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ogwXbet - Premium Betting Platform</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="style.css">
@@ -126,6 +126,11 @@
                 </div>
             </div>
         </header>
+
+        <!-- Chat Launcher -->
+        <button id="open-chat-btn" class="chat-launch-btn" aria-label="Open chats" title="Chats">
+            <i class="fas fa-comments"></i>
+        </button>
 
         <!-- Main Content -->
         <div class="dashboard-container">
@@ -271,6 +276,17 @@
                                 <span class="toggle-slider"></span>
                             </label>
                         </div>
+                        
+                        <div class="privacy-option" style="display: flex; justify-content: between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
+                            <div>
+                                <div style="font-weight: 500;">Allow Chat Requests</div>
+                                <div style="font-size: 0.85rem; color: var(--text-secondary);">Allow other users to start a chat with you</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="privacy-chats" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
                     </div>
 
                     <button class="btn" id="save-profile-btn" style="margin-top: 20px;">
@@ -385,6 +401,21 @@
                 </div>
                 
                 <div class="admin-section">
+                    <h3><i class="fas fa-bullhorn"></i> Announcements</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">
+                        Post a global announcement to the pinned Announcements chat. Only moderators can send messages there.
+                    </p>
+                    <div class="form-group">
+                        <label for="announcement-message">Announcement Message</label>
+                        <textarea id="announcement-message" rows="4" placeholder="Type an announcement to all users..." style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text); resize: vertical;"></textarea>
+                    </div>
+                    <button class="btn btn-success" id="send-announcement-btn" style="margin-top: 10px;">
+                        <i class="fas fa-paper-plane"></i> Send Announcement
+                    </button>
+                    <div class="status" id="announcement-status"></div>
+                </div>
+
+                <div class="admin-section">
                     <h3><i class="fas fa-users"></i> Active User Accounts</h3>
                     <p style="margin-bottom: 15px; color: var(--text-secondary);">View and manage all active user accounts.</p>
                     
@@ -491,6 +522,64 @@
             </div>
         </div>
     </div>
+
+    <!-- Chat System -->
+    <div id="chat-overlay" class="chat-overlay hidden">
+        <div class="chat-window" role="dialog" aria-modal="true" aria-label="Chats">
+            <div class="chat-sidebar">
+                <div class="chat-sidebar-header">
+                    <h3>Chats</h3>
+                    <button id="close-chat-btn" class="chat-icon-btn" aria-label="Close chats" title="Close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="chat-sidebar-tools">
+                    <input type="text" id="chat-search" class="chat-search" placeholder="Search chats..." autocomplete="off">
+                </div>
+
+                <div class="chat-list" id="chat-list">
+                    <!-- Chat items rendered by JS -->
+                </div>
+            </div>
+
+            <div class="chat-main">
+                <div class="chat-main-header">
+                    <div class="chat-main-title">
+                        <div id="chat-selected-title">Select a chat</div>
+                        <div id="chat-selected-subtitle" class="chat-selected-subtitle"></div>
+                    </div>
+
+                    <div class="chat-main-actions">
+                        <button class="btn btn-secondary hidden" id="view-chat-profile-btn">
+                            <i class="fas fa-user"></i> View Profile
+                        </button>
+                        <button class="btn btn-danger hidden" id="block-chat-user-btn">
+                            <i class="fas fa-ban"></i> Block
+                        </button>
+                    </div>
+                </div>
+
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-empty-state" id="chat-empty-state">
+                        <i class="fas fa-comments"></i>
+                        <h3>No chat selected</h3>
+                        <p>Select a conversation on the left to start messaging.</p>
+                    </div>
+                </div>
+
+                <div class="chat-compose">
+                    <input type="text" id="chat-message-input" placeholder="Type a message..." autocomplete="off" />
+                    <button class="btn" id="send-chat-message-btn">
+                        <i class="fas fa-paper-plane"></i> Send
+                    </button>
+                </div>
+
+                <div class="status" id="chat-status"></div>
+            </div>
+        </div>
+    </div>
+    <!-- END Chat System -->
 
     <!-- 🔥 INSERTED CUSTOM POPUP SYSTEM HTML -->
     <div id="popup-overlay" class="popup-overlay hidden">
