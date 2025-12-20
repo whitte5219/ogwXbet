@@ -1,7 +1,5 @@
 // Firebase imports
-import {
-    initializeApp
-} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 
 import {
     getDatabase,
@@ -42,7 +40,13 @@ const auth = getAuth(app);
 const eventsRef = ref(db, "events");
 const eventLogRef = ref(db, "eventLog");
 const accountsRef = ref(db, "accounts");
-const userSearchRef = ref(db, "userSearch"); // NEW: User search reference
+const userSearchRef = ref(db, "userSearch");
+
+// NEW: Chat + blocking nodes (allowed by your confirmation)
+const chatsDmRef = ref(db, "chats/dm");
+const chatsUserThreadsRef = ref(db, "chats/userThreads");
+const announcementsRef = ref(db, "chats/announcements");
+const blocksRef = ref(db, "blocks");
 
 // Map of eventId -> firebase key
 window.eventKeyMap = {};
@@ -111,7 +115,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const tokenStatus = document.getElementById('token-status');
     const eventLogStatus = document.getElementById('event-log-status');
 
-    // ===== PHASE 1: NEW ELEMENTS =====
+    // ===== PHASE 1: COMMUNITY ELEMENTS =====
     const updatePictureBtn = document.getElementById('update-picture-btn');
     const saveProfileBtn = document.getElementById('save-profile-btn');
     const profileStatus = document.getElementById('profile-status');
@@ -119,6 +123,27 @@ document.addEventListener('DOMContentLoaded', function () {
     const refreshPredictionsBtn = document.getElementById('refresh-predictions-btn');
     const closeProfilePopup = document.getElementById('close-profile-popup');
     const userProfilePopup = document.getElementById('user-profile-popup');
+
+    // ===== NEW: ANNOUNCEMENTS ADMIN ELEMENTS =====
+    const announcementMessageEl = document.getElementById('announcement-message');
+    const sendAnnouncementBtn = document.getElementById('send-announcement-btn');
+    const announcementStatusEl = document.getElementById('announcement-status');
+
+    // ===== NEW: CHAT ELEMENTS =====
+    const openChatBtn = document.getElementById('open-chat-btn');
+    const chatOverlay = document.getElementById('chat-overlay');
+    const closeChatBtn = document.getElementById('close-chat-btn');
+    const chatListEl = document.getElementById('chat-list');
+    const chatSearchEl = document.getElementById('chat-search');
+    const chatMessagesEl = document.getElementById('chat-messages');
+    const chatEmptyStateEl = document.getElementById('chat-empty-state');
+    const chatSelectedTitleEl = document.getElementById('chat-selected-title');
+    const chatSelectedSubtitleEl = document.getElementById('chat-selected-subtitle');
+    const chatMessageInputEl = document.getElementById('chat-message-input');
+    const sendChatMessageBtn = document.getElementById('send-chat-message-btn');
+    const chatStatusEl = document.getElementById('chat-status');
+    const viewChatProfileBtn = document.getElementById('view-chat-profile-btn');
+    const blockChatUserBtn = document.getElementById('block-chat-user-btn');
 
     // ===== CUSTOM POPUP SYSTEM =====
     const popupOverlay = document.getElementById('popup-overlay');
@@ -129,6 +154,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
     let currentUserUid = null;
     let currentAccount = null;
+
+    // Live listeners that must be cleaned up
+    let liveAccountUnsub = null;
+    let liveThreadsUnsub = null;
+    let liveMessagesUnsub = null;
+
+    // Chat state
+    let currentChat = null; // { type: 'announcements' } OR { type:'dm', threadId, otherUid, otherUsername, otherProfile }
+    let cachedUserSearch = {}; // uid -> userSearch data (for fast profile opening)
+    let cachedBlocksAll = null; // blocks snapshot cache during searches
+    let myBlockedSet = new Set(); // uids I blocked (from blocks/<me>)
 
     function closePopup() {
         if (!popupOverlay) return;
@@ -172,7 +208,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 b.textContent = btn.text || 'OK';
                 b.classList.add('popup-btn');
                 if (btn.type) {
-                    b.classList.add(btn.type); // 'confirm', 'cancel'
+                    b.classList.add(btn.type);
                 }
 
                 b.addEventListener('click', () => {
@@ -267,7 +303,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            // Create form HTML
             let formHTML = '';
             fields.forEach(field => {
                 formHTML += `
@@ -282,8 +317,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                 `).join('')}
                             </select>
                         ` : `
-                            <input type="${field.type}" id="popup-field-${field.name}" 
-                                   value="${field.value || ''}" 
+                            <input type="${field.type}" id="popup-field-${field.name}"
+                                   value="${field.value ?? ''}"
                                    style="width: 100%; padding: 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text);"
                                    ${field.placeholder ? `placeholder="${field.placeholder}"` : ''}>
                         `}
@@ -296,7 +331,7 @@ document.addEventListener('DOMContentLoaded', function () {
             popupInput.classList.add('hidden');
 
             popupButtons.innerHTML = '';
-            
+
             const cancelBtn = document.createElement('button');
             cancelBtn.textContent = cancelText;
             cancelBtn.classList.add('popup-btn', 'cancel');
@@ -312,7 +347,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 const result = {};
                 fields.forEach(field => {
                     const input = document.getElementById(`popup-field-${field.name}`);
-                    result[field.name] = field.type === 'select' ? input.value : input.value;
+                    result[field.name] = input ? input.value : '';
                 });
                 closePopup();
                 resolve(result);
@@ -337,91 +372,140 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 200);
     }
 
-    function openUserProfilePopup(userData) {
+    function normalizePrivacy(profilePrivacy) {
+        const p = profilePrivacy || {};
+        return {
+            showReputation: p.showReputation !== false,
+            showBets: p.showBets !== false,
+            showPredictions: p.showPredictions !== false,
+            showChats: p.showChats !== false
+        };
+    }
+
+    async function openUserProfilePopup(userData) {
         if (!userProfilePopup) return;
-        
+
+        const uid = userData.uid;
         const profile = userData.profile || {};
-        const privacy = profile.privacy || {};
-        
-        // Respect privacy settings
-        const showReputation = privacy.showReputation !== false;
-        const showBets = privacy.showBets !== false;
-        const showPredictions = privacy.showPredictions !== false;
+        const privacy = normalizePrivacy((profile && profile.privacy) || {});
+        const isSelf = currentUserUid && uid === currentUserUid;
+
+        // Block states
+        const iBlocked = !!(currentUserUid && uid && (await get(ref(db, `blocks/${currentUserUid}/${uid}`))).exists());
+        const theyBlockedMe = !!(currentUserUid && uid && (await get(ref(db, `blocks/${uid}/${currentUserUid}`))).exists());
+
+        // If they blocked me, this profile should normally never be reachable (search hides it),
+        // but handle gracefully.
+        if (theyBlockedMe) {
+            await showMessagePopup('Profile Unavailable', 'You cannot view this profile.');
+            return;
+        }
 
         // Set username in popup header
-        document.getElementById('profile-popup-username').textContent = userData.username || 'User Profile';
-        
-        // Build profile content
+        const headerEl = document.getElementById('profile-popup-username');
+        if (headerEl) headerEl.textContent = userData.username || 'User Profile';
+
         const profileContent = document.getElementById('profile-popup-content');
+        if (!profileContent) return;
+
+        const createdLabel = userData.creationDate ? new Date(userData.creationDate).toLocaleDateString() : 'Unknown';
+        const repValue = typeof userData.reputation === 'number' ? userData.reputation : 0;
+        const betsCount = Array.isArray(userData.bets) ? userData.bets.length : 0;
+        const predsCount = Array.isArray(userData.predictions) ? userData.predictions.length : 0;
+
+        const showStats = (privacy.showReputation || privacy.showBets || privacy.showPredictions);
+
+        // Buttons logic
+        const canChatWithTarget = !isSelf && privacy.showChats && !iBlocked;
+        const chatBtnDisabledReason = isSelf
+            ? 'This is your profile.'
+            : (!privacy.showChats ? 'This user disabled chat requests.' : (iBlocked ? 'You blocked this user.' : ''));
+
         profileContent.innerHTML = `
-            <div class="profile-popup-avatar">
-                ${profile.picture ? `
-                    <img src="${profile.picture}" 
-                         alt="${userData.username}" 
-                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                    <div class="profile-popup-avatar-placeholder" style="display: none;">
-                        <i class="fas fa-user"></i>
-                        <div style="font-size: 0.7rem; margin-top: 5px;">No PFP</div>
-                    </div>
-                ` : `
-                    <div class="profile-popup-avatar-placeholder">
-                        <i class="fas fa-user"></i>
-                        <div style="font-size: 0.7rem; margin-top: 5px;">No PFP</div>
-                    </div>
-                `}
-            </div>
-
-            <div class="profile-popup-username">
-                <h4>${userData.username}</h4>
-            </div>
-
-            <div class="profile-popup-join-date">
-                <p>Member since ${userData.creationDate ? new Date(userData.creationDate).toLocaleDateString() : 'Unknown'}</p>
-            </div>
-
-            ${profile.bio ? `
-                <div class="profile-popup-bio">
-                    <h5>About</h5>
-                    <p>${profile.bio}</p>
+            <div class="profile-popup-top">
+                <div class="profile-popup-avatar">
+                    ${profile.picture ? `<img src="${profile.picture}" alt="${userData.username}" onerror="this.style.display='none';">` : ''}
                 </div>
-            ` : ''}
+                <div class="profile-popup-identity">
+                    <div class="name">${userData.username || 'User'}</div>
+                    <div class="meta">Member since ${createdLabel}</div>
+                    <div class="profile-popup-badges">
+                        ${userData.isModerator ? `<span class="profile-badge mod"><i class="fas fa-shield-alt"></i> MODERATOR</span>` : ''}
+                        ${iBlocked ? `<span class="profile-badge"><i class="fas fa-ban"></i> You blocked this user</span>` : ''}
+                    </div>
+                </div>
+            </div>
 
-            ${showReputation || showBets || showPredictions ? `
+            ${profile.bio ? `<div class="profile-popup-bio">${escapeHtml(profile.bio)}</div>` : ''}
+
+            ${showStats ? `
                 <div class="profile-popup-stats">
-                    ${showReputation ? `
-                        <div class="profile-popup-stat">
-                            <div class="profile-popup-stat-value">
-                                ${typeof userData.reputation === 'number' ? userData.reputation.toFixed(1) : '0'}
-                            </div>
-                            <div class="profile-popup-stat-label">Reputation</div>
+                    ${privacy.showReputation ? `
+                        <div class="profile-stat">
+                            <div class="value">${Number(repValue).toFixed(1)}</div>
+                            <div class="label">Reputation</div>
                         </div>
                     ` : ''}
-                    
-                    ${showBets ? `
-                        <div class="profile-popup-stat">
-                            <div class="profile-popup-stat-value">
-                                ${Array.isArray(userData.bets) ? userData.bets.length : 0}
-                            </div>
-                            <div class="profile-popup-stat-label">Total Bets</div>
+                    ${privacy.showBets ? `
+                        <div class="profile-stat">
+                            <div class="value">${betsCount}</div>
+                            <div class="label">Total Bets</div>
                         </div>
                     ` : ''}
-                    
-                    ${showPredictions ? `
-                        <div class="profile-popup-stat">
-                            <div class="profile-popup-stat-value">
-                                ${Array.isArray(userData.predictions) ? userData.predictions.length : 0}
-                            </div>
-                            <div class="profile-popup-stat-label">Predictions</div>
+                    ${privacy.showPredictions ? `
+                        <div class="profile-stat">
+                            <div class="value">${predsCount}</div>
+                            <div class="label">Predictions</div>
                         </div>
                     ` : ''}
                 </div>
             ` : `
-                <div class="profile-popup-private">
-                    <i class="fas fa-user-shield"></i>
-                    <p>This user has chosen to keep their stats private.</p>
+                <div class="profile-popup-note">
+                    <i class="fas fa-user-shield"></i> This user keeps stats private.
                 </div>
             `}
+
+            <div class="profile-popup-actions">
+                <button class="btn ${canChatWithTarget ? '' : 'btn-secondary'}" id="profile-chat-btn" ${canChatWithTarget ? '' : 'disabled'}>
+                    <i class="fas fa-comments"></i> Chat
+                </button>
+                ${!isSelf ? `
+                    <button class="btn ${iBlocked ? 'btn-secondary' : 'btn-danger'}" id="profile-block-btn">
+                        <i class="fas ${iBlocked ? 'fa-unlock' : 'fa-ban'}"></i> ${iBlocked ? 'Unblock' : 'Block'}
+                    </button>
+                ` : `
+                    <button class="btn btn-secondary" disabled title="You can't block yourself">
+                        <i class="fas fa-ban"></i> Block
+                    </button>
+                `}
+            </div>
+
+            ${(!canChatWithTarget && chatBtnDisabledReason) ? `<div class="profile-popup-note">${escapeHtml(chatBtnDisabledReason)}</div>` : ''}
         `;
+
+        // Bind buttons
+        const chatBtn = document.getElementById('profile-chat-btn');
+        if (chatBtn) {
+            chatBtn.addEventListener('click', async () => {
+                if (!canChatWithTarget) return;
+                await startOrOpenDm(uid, userData);
+                closeUserProfilePopup();
+            });
+        }
+
+        const blockBtn = document.getElementById('profile-block-btn');
+        if (blockBtn && !isSelf) {
+            blockBtn.addEventListener('click', async () => {
+                if (iBlocked) {
+                    await unblockUser(uid, userData.username || 'User');
+                } else {
+                    await blockUser(uid, userData.username || 'User');
+                }
+                // Refresh popup state (simple: close and reopen)
+                closeUserProfilePopup();
+                setTimeout(() => openUserProfilePopup(userData), 50);
+            });
+        }
 
         userProfilePopup.classList.remove('hidden');
         requestAnimationFrame(() => {
@@ -429,322 +513,443 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===============================
+    function escapeHtml(str) {
+        if (typeof str !== 'string') return '';
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
 
+    // ===============================
     checkLoginStatus();
 
-    showRegisterBtn.addEventListener('click', function () {
-        loginSection.classList.add('hidden');
-        accountCreationSection.classList.remove('hidden');
-    });
-
-    showLoginBtn.addEventListener('click', function () {
-        accountCreationSection.classList.add('hidden');
-        loginSection.classList.remove('hidden');
-    });
-
-    toggleTokenBtn.addEventListener('click', function () {
-        const tokenInput = document.getElementById('login-token');
-        const icon = this.querySelector('i');
-        if (tokenInput.type === 'password') {
-            tokenInput.type = 'text';
-            icon.classList.remove('fa-eye');
-            icon.classList.add('fa-eye-slash');
-        } else {
-            tokenInput.type = 'password';
-            icon.classList.remove('fa-eye-slash');
-            icon.classList.add('fa-eye');
-        }
-    });
-
-    // ===== PHASE 1: NEW EVENT LISTENERS =====
-    if (updatePictureBtn) {
-        updatePictureBtn.addEventListener('click', updateProfilePicture);
+    if (showRegisterBtn) {
+        showRegisterBtn.addEventListener('click', function () {
+            loginSection.classList.add('hidden');
+            accountCreationSection.classList.remove('hidden');
+        });
     }
 
-    if (saveProfileBtn) {
-        saveProfileBtn.addEventListener('click', saveProfileSettings);
+    if (showLoginBtn) {
+        showLoginBtn.addEventListener('click', function () {
+            accountCreationSection.classList.add('hidden');
+            loginSection.classList.remove('hidden');
+        });
     }
 
-    if (searchUserBtn) {
-        searchUserBtn.addEventListener('click', searchUsers);
-    }
+    if (toggleTokenBtn) {
+        toggleTokenBtn.addEventListener('click', function () {
+            const tokenInput = document.getElementById('login-token');
+            const icon = this.querySelector('i');
+            if (!tokenInput || !icon) return;
 
-    if (refreshPredictionsBtn) {
-        refreshPredictionsBtn.addEventListener('click', refreshAccountData);
-    }
-
-    if (closeProfilePopup) {
-        closeProfilePopup.addEventListener('click', closeUserProfilePopup);
-    }
-
-    // Close profile popup when clicking outside
-    if (userProfilePopup) {
-        userProfilePopup.addEventListener('click', function(e) {
-            if (e.target === userProfilePopup) {
-                closeUserProfilePopup();
+            if (tokenInput.type === 'password') {
+                tokenInput.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                tokenInput.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
             }
         });
     }
 
-    // ===== ACCOUNT CREATION (UPDATED WITH USERSEARCH SYNC) =====
-    createAccountBtn.addEventListener('click', async function () {
-        const username = document.getElementById('username').value.trim();
-        const webhook = document.getElementById('webhook').value.trim();
+    // ===== PHASE 1: COMMUNITY EVENT LISTENERS =====
+    if (updatePictureBtn) updatePictureBtn.addEventListener('click', updateProfilePicture);
+    if (saveProfileBtn) saveProfileBtn.addEventListener('click', saveProfileSettings);
+    if (searchUserBtn) searchUserBtn.addEventListener('click', searchUsers);
+    if (refreshPredictionsBtn) refreshPredictionsBtn.addEventListener('click', refreshAccountData);
+    if (closeProfilePopup) closeProfilePopup.addEventListener('click', closeUserProfilePopup);
 
-        if (!username) {
-            showStatus('Please enter a username', 'error');
-            return;
-        }
-        if (!webhook) {
-            showStatus('Please enter a Discord webhook URL', 'error');
-            return;
-        }
-        if (!webhook.startsWith('https://discord.com/api/webhooks/')) {
-            showStatus('Please enter a valid Discord webhook URL', 'error');
-            return;
-        }
+    if (userProfilePopup) {
+        userProfilePopup.addEventListener('click', function (e) {
+            if (e.target === userProfilePopup) closeUserProfilePopup();
+        });
+    }
 
-        const email = `${username}@ogwxbet.local`;
-        const token = generateToken();
-
-        try {
-            // Create auth user (email + password = token)
-            const userCredential = await createUserWithEmailAndPassword(auth, email, token);
-            const uid = userCredential.user.uid;
-
-            // Store profile in Realtime Database (WITH NEW PROFILE FIELDS)
-            const accountProfile = {
-                username: username,
-                webhook: webhook,
-                creationDate: new Date().toISOString(),
-                bets: [],
-                predictions: [],
-                reputation: 0,
-                isModerator: username === 'Whitte4',
-                deleted: false,
-                deletedAt: null,
-                deletedBy: null,
-                // PHASE 1: NEW PROFILE FIELDS
-                profile: {
-                    picture: "", // Will store URL for profile picture
-                    bio: "", // User bio/description
-                    privacy: {
-                        showReputation: true,
-                        showBets: true,
-                        showPredictions: true
-                    }
-                }
-            };
-
-            await set(ref(db, `accounts/${uid}`), accountProfile);
-
-            // NEW: Also create user search data
-            await set(ref(db, `userSearch/${uid}`), {
-                username: username,
-                creationDate: accountProfile.creationDate,
-                profile: accountProfile.profile
-            });
-
-            // Send token to Discord
-            const payload = {
-                content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${token}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**`
-            };
-            const response = await fetch(webhook, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                showStatus('Account created, but failed to send token to Discord. Check your webhook.', 'error');
-            } else {
-                showStatus('Account created successfully! Token sent to your Discord.', 'success');
+    // ===== NEW: ANNOUNCEMENT SENDER (mods only) =====
+    if (sendAnnouncementBtn) {
+        sendAnnouncementBtn.addEventListener('click', async () => {
+            if (!isCurrentUserModerator()) {
+                setStatus(announcementStatusEl, 'Only moderators can send announcements.', 'error', 3000);
+                return;
+            }
+            const text = (announcementMessageEl ? announcementMessageEl.value : '').trim();
+            if (!text) {
+                setStatus(announcementStatusEl, 'Please type an announcement.', 'error', 2500);
+                return;
             }
 
-            // Sign out after creation so user goes back to login screen
+            const ok = await showConfirmPopup(
+                'Send Announcement',
+                'Send this message to the global Announcements chat?',
+                'Send',
+                'Cancel'
+            );
+            if (!ok) return;
+
             try {
-                await signOut(auth);
-            } catch (e) {
-                console.error('Sign-out after creation failed:', e);
+                const msg = {
+                    text,
+                    ts: Date.now(),
+                    postedByUid: currentUserUid,
+                    postedBy: (currentAccount && currentAccount.username) ? currentAccount.username : 'Moderator'
+                };
+                await push(ref(db, 'chats/announcements/messages'), msg);
+                if (announcementMessageEl) announcementMessageEl.value = '';
+                setStatus(announcementStatusEl, 'Announcement sent.', 'success', 2500);
+            } catch (err) {
+                console.error('Failed to send announcement:', err);
+                setStatus(announcementStatusEl, 'Failed to send announcement.', 'error', 3000);
             }
+        });
+    }
 
-            accountCreationSection.classList.add('hidden');
-            loginSection.classList.remove('hidden');
-            document.getElementById('login-username').value = username;
-            document.getElementById('username').value = '';
-            document.getElementById('webhook').value = '';
+    // ===== NEW: CHAT UI EVENT LISTENERS =====
+    if (openChatBtn) {
+        openChatBtn.addEventListener('click', () => {
+            openChatOverlay();
+        });
+    }
 
-        } catch (error) {
-            console.error('Create account error:', error);
-            if (error.code === 'auth/email-already-in-use') {
-                showStatus('Username already taken. Please choose a different one.', 'error');
+    if (closeChatBtn) {
+        closeChatBtn.addEventListener('click', () => {
+            closeChatOverlay();
+        });
+    }
+
+    if (chatOverlay) {
+        chatOverlay.addEventListener('click', (e) => {
+            if (e.target === chatOverlay) closeChatOverlay();
+        });
+    }
+
+    if (chatSearchEl) {
+        chatSearchEl.addEventListener('input', () => {
+            renderChatListFromCache();
+        });
+    }
+
+    if (sendChatMessageBtn) {
+        sendChatMessageBtn.addEventListener('click', async () => {
+            await sendCurrentChatMessage();
+        });
+    }
+
+    if (chatMessageInputEl) {
+        chatMessageInputEl.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                await sendCurrentChatMessage();
+            }
+        });
+    }
+
+    if (viewChatProfileBtn) {
+        viewChatProfileBtn.addEventListener('click', async () => {
+            if (!currentChat || currentChat.type !== 'dm') return;
+            const uid = currentChat.otherUid;
+            const userData = await getUserSearchByUid(uid);
+            if (userData) {
+                await openUserProfilePopup(userData);
             } else {
-                showStatus('Failed to create account. Please try again later.', 'error');
+                await showMessagePopup('Not Found', 'User profile could not be loaded.');
             }
-        }
-    });
+        });
+    }
+
+    if (blockChatUserBtn) {
+        blockChatUserBtn.addEventListener('click', async () => {
+            if (!currentChat || currentChat.type !== 'dm') return;
+            const uid = currentChat.otherUid;
+            const uname = currentChat.otherUsername || 'User';
+
+            const iBlocked = !!(currentUserUid && uid && (await get(ref(db, `blocks/${currentUserUid}/${uid}`))).exists());
+            if (iBlocked) {
+                await unblockUser(uid, uname);
+            } else {
+                await blockUser(uid, uname);
+            }
+        });
+    }
+
+    // ===== ACCOUNT CREATION (UPDATED WITH USERSEARCH SYNC + chats privacy default) =====
+    if (createAccountBtn) {
+        createAccountBtn.addEventListener('click', async function () {
+            const username = document.getElementById('username').value.trim();
+            const webhook = document.getElementById('webhook').value.trim();
+
+            if (!username) {
+                showStatus('Please enter a username', 'error');
+                return;
+            }
+            if (!webhook) {
+                showStatus('Please enter a Discord webhook URL', 'error');
+                return;
+            }
+            if (!webhook.startsWith('https://discord.com/api/webhooks/')) {
+                showStatus('Please enter a valid Discord webhook URL', 'error');
+                return;
+            }
+
+            const email = `${username}@ogwxbet.local`;
+            const token = generateToken();
+
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, token);
+                const uid = userCredential.user.uid;
+
+                const accountProfile = {
+                    username: username,
+                    webhook: webhook,
+                    creationDate: new Date().toISOString(),
+                    bets: [],
+                    predictions: [],
+                    reputation: 0,
+                    isModerator: username === 'Whitte4',
+                    deleted: false,
+                    deletedAt: null,
+                    deletedBy: null,
+                    profile: {
+                        picture: "",
+                        bio: "",
+                        privacy: {
+                            showReputation: true,
+                            showBets: true,
+                            showPredictions: true,
+                            showChats: true
+                        }
+                    }
+                };
+
+                await set(ref(db, `accounts/${uid}`), accountProfile);
+
+                await set(ref(db, `userSearch/${uid}`), {
+                    username: username,
+                    creationDate: accountProfile.creationDate,
+                    profile: accountProfile.profile
+                });
+
+                const payload = {
+                    content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${token}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**`
+                };
+                const response = await fetch(webhook, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    showStatus('Account created, but failed to send token to Discord. Check your webhook.', 'error');
+                } else {
+                    showStatus('Account created successfully! Token sent to your Discord.', 'success');
+                }
+
+                try {
+                    await signOut(auth);
+                } catch (e) {
+                    console.error('Sign-out after creation failed:', e);
+                }
+
+                accountCreationSection.classList.add('hidden');
+                loginSection.classList.remove('hidden');
+                document.getElementById('login-username').value = username;
+                document.getElementById('username').value = '';
+                document.getElementById('webhook').value = '';
+
+            } catch (error) {
+                console.error('Create account error:', error);
+                if (error.code === 'auth/email-already-in-use') {
+                    showStatus('Username already taken. Please choose a different one.', 'error');
+                } else {
+                    showStatus('Failed to create account. Please try again later.', 'error');
+                }
+            }
+        });
+    }
 
     // ===== LOGIN =====
-    loginBtn.addEventListener('click', async function () {
-        const username = document.getElementById('login-username').value.trim();
-        const token = document.getElementById('login-token').value.trim();
+    if (loginBtn) {
+        loginBtn.addEventListener('click', async function () {
+            const username = document.getElementById('login-username').value.trim();
+            const token = document.getElementById('login-token').value.trim();
 
-        if (!username || !token) {
-            loginStatus.textContent = 'Please enter both username and token';
-            loginStatus.className = 'status error';
-            return;
-        }
+            if (!username || !token) {
+                if (loginStatus) {
+                    loginStatus.textContent = 'Please enter both username and token';
+                    loginStatus.className = 'status error';
+                }
+                return;
+            }
 
-        const email = `${username}@ogwxbet.local`;
+            const email = `${username}@ogwxbet.local`;
 
-        try {
-            await signInWithEmailAndPassword(auth, email, token);
-            loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
-            loginStatus.className = 'status success';
-            // onAuthStateChanged (inside checkLoginStatus) will handle dashboard display
-        } catch (error) {
-            console.error('Login error:', error);
-            loginStatus.textContent = 'Invalid username or token. Please try again.';
-            loginStatus.className = 'status error';
-        }
-    });
+            try {
+                await signInWithEmailAndPassword(auth, email, token);
+                if (loginStatus) {
+                    loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
+                    loginStatus.className = 'status success';
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                if (loginStatus) {
+                    loginStatus.textContent = 'Invalid username or token. Please try again.';
+                    loginStatus.className = 'status error';
+                }
+            }
+        });
+    }
 
-    logoutBtn.addEventListener('click', async function () {
-        try {
-            await signOut(auth);
-        } catch (e) {
-            console.error('Logout error:', e);
-        }
-        sessionStorage.removeItem('ogwXbet_currentUser');
-        sessionStorage.removeItem('ogwXbet_loginTime');
-        currentUserUid = null;
-        currentAccount = null;
-        showLoginPage();
-    });
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', async function () {
+            await doLogoutToLogin();
+        });
+    }
 
     // ===== TOKEN REGENERATION =====
-    changeTokenBtn.addEventListener('click', async function () {
-        if (!currentAccount || !currentUserUid) return;
-        const user = auth.currentUser;
-        if (!user) return;
+    if (changeTokenBtn) {
+        changeTokenBtn.addEventListener('click', async function () {
+            if (!currentAccount || !currentUserUid) return;
+            const user = auth.currentUser;
+            if (!user) return;
 
-        tokenStatus.textContent = '';
-        tokenStatus.className = 'status';
+            if (tokenStatus) {
+                tokenStatus.textContent = '';
+                tokenStatus.className = 'status';
+            }
 
-        const choice = await showChoicePopup(
-            'Generate New Token',
-            'How do you want to receive your new login token?',
-            [
-                { label: 'Use account creation webhook', value: 'original' },
-                { label: 'Enter new webhook', value: 'new' }
-            ]
-        );
-
-        if (!choice) {
-            tokenStatus.textContent = 'Token generation cancelled.';
-            tokenStatus.className = 'status info';
-            return;
-        }
-
-        let targetWebhook = currentAccount.webhook;
-
-        if (choice === 'new') {
-            const newWebhook = await showInputPopup(
-                'New Webhook',
-                'Enter new Discord webhook URL:',
-                'https://discord.com/api/webhooks/...'
+            const choice = await showChoicePopup(
+                'Generate New Token',
+                'How do you want to receive your new login token?',
+                [
+                    { label: 'Use account creation webhook', value: 'original' },
+                    { label: 'Enter new webhook', value: 'new' }
+                ]
             );
-            if (!newWebhook) {
-                tokenStatus.textContent = 'Token generation cancelled.';
-                tokenStatus.className = 'status info';
+
+            if (!choice) {
+                if (tokenStatus) {
+                    tokenStatus.textContent = 'Token generation cancelled.';
+                    tokenStatus.className = 'status info';
+                }
                 return;
             }
-            if (!newWebhook.startsWith('https://discord.com/api/webhooks/')) {
-                tokenStatus.textContent = 'Invalid webhook URL.';
-                tokenStatus.className = 'status error';
-                return;
+
+            let targetWebhook = currentAccount.webhook;
+
+            if (choice === 'new') {
+                const newWebhook = await showInputPopup(
+                    'New Webhook',
+                    'Enter new Discord webhook URL:',
+                    'https://discord.com/api/webhooks/...'
+                );
+                if (!newWebhook) {
+                    if (tokenStatus) {
+                        tokenStatus.textContent = 'Token generation cancelled.';
+                        tokenStatus.className = 'status info';
+                    }
+                    return;
+                }
+                if (!newWebhook.startsWith('https://discord.com/api/webhooks/')) {
+                    if (tokenStatus) {
+                        tokenStatus.textContent = 'Invalid webhook URL.';
+                        tokenStatus.className = 'status error';
+                    }
+                    return;
+                }
+                targetWebhook = newWebhook;
+                currentAccount.webhook = newWebhook;
             }
-            targetWebhook = newWebhook;
-            currentAccount.webhook = newWebhook;
-        }
 
-        const newToken = generateToken();
+            const newToken = generateToken();
 
-        try {
-            // Update Firebase Auth password
-            await updatePassword(user, newToken);
+            try {
+                await updatePassword(user, newToken);
+                await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
 
-            // Update profile in DB (no token stored, just webhook if changed)
-            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+                const payload = {
+                    content: `**New Login Token Generated**\n\nUsername: ${currentAccount.username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**Old token is no longer valid.**`
+                };
+                const response = await fetch(targetWebhook, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
 
-            // Send new token to webhook
-            const payload = {
-                content: `**New Login Token Generated**\n\nUsername: ${currentAccount.username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**Old token is no longer valid.**`
-            };
-            const response = await fetch(targetWebhook, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (response.ok) {
-                tokenStatus.textContent = 'New token generated and sent to Discord.';
-                tokenStatus.className = 'status success';
-            } else {
-                tokenStatus.textContent = 'Token updated, but sending to Discord failed.';
-                tokenStatus.className = 'status error';
+                if (tokenStatus) {
+                    if (response.ok) {
+                        tokenStatus.textContent = 'New token generated and sent to Discord.';
+                        tokenStatus.className = 'status success';
+                    } else {
+                        tokenStatus.textContent = 'Token updated, but sending to Discord failed.';
+                        tokenStatus.className = 'status error';
+                    }
+                }
+            } catch (err) {
+                console.error('Token regen error:', err);
+                if (tokenStatus) {
+                    tokenStatus.textContent = 'Failed to update token. Try re-logging and retry.';
+                    tokenStatus.className = 'status error';
+                }
             }
-        } catch (err) {
-            console.error('Token regen error:', err);
-            tokenStatus.textContent = 'Failed to update token. Try re-logging and retry.';
-            tokenStatus.className = 'status error';
-        }
-    });
-
+        });
+    }
     // ===== EVENT CREATION =====
-    addEventBtn.addEventListener('click', function () {
-        const title = document.getElementById('event-title').value.trim();
-        const teamA = document.getElementById('team-a').value.trim();
-        const teamB = document.getElementById('team-b').value.trim();
-        const date = document.getElementById('event-date').value;
-        const category = document.getElementById('event-category').value;
+    if (addEventBtn) {
+        addEventBtn.addEventListener('click', function () {
+            const title = document.getElementById('event-title').value.trim();
+            const teamA = document.getElementById('team-a').value.trim();
+            const teamB = document.getElementById('team-b').value.trim();
+            const date = document.getElementById('event-date').value;
+            const category = document.getElementById('event-category').value;
 
-        if (!title || !teamA || !teamB || !date) {
-            document.getElementById('event-status').textContent = 'Please fill in all fields';
-            document.getElementById('event-status').className = 'status error';
-            return;
-        }
+            if (!title || !teamA || !teamB || !date) {
+                const st = document.getElementById('event-status');
+                if (st) {
+                    st.textContent = 'Please fill in all fields';
+                    st.className = 'status error';
+                }
+                return;
+            }
 
-        const newEvent = {
-            id: Date.now().toString(),
-            title: title,
-            teamA: teamA,
-            teamB: teamB,
-            date: date,
-            category: category,
-            oddsA: 2.10,
-            oddsDraw: 3.25,
-            oddsB: 2.80,
-            createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
-        };
+            const newEvent = {
+                id: Date.now().toString(),
+                title: title,
+                teamA: teamA,
+                teamB: teamB,
+                date: date,
+                category: category,
+                oddsA: 2.10,
+                oddsDraw: 3.25,
+                oddsB: 2.80,
+                createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
+            };
 
-        if (window.saveEventToFirebase) {
-            window.saveEventToFirebase(newEvent);
-        }
+            if (window.saveEventToFirebase) {
+                window.saveEventToFirebase(newEvent);
+            }
 
-        document.getElementById('event-status').textContent = 'Event added successfully!';
-        document.getElementById('event-status').className = 'status success';
+            const st = document.getElementById('event-status');
+            if (st) {
+                st.textContent = 'Event added successfully!';
+                st.className = 'status success';
+            }
 
-        document.getElementById('event-title').value = '';
-        document.getElementById('team-a').value = '';
-        document.getElementById('team-b').value = '';
-        document.getElementById('event-date').value = '';
+            document.getElementById('event-title').value = '';
+            document.getElementById('team-a').value = '';
+            document.getElementById('team-b').value = '';
+            document.getElementById('event-date').value = '';
 
-        setTimeout(() => {
-            document.getElementById('event-status').className = 'status';
-        }, 3000);
-    });
+            setTimeout(() => {
+                const st2 = document.getElementById('event-status');
+                if (st2) st2.className = 'status';
+            }, 3000);
+        });
+    }
 
     if (clearEventLogBtn) {
         clearEventLogBtn.addEventListener('click', async function () {
@@ -760,15 +965,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
             try {
                 await set(eventLogRef, null);
-                eventLogStatus.textContent = 'Event log cleared.';
-                eventLogStatus.className = 'status success';
+                if (eventLogStatus) {
+                    eventLogStatus.textContent = 'Event log cleared.';
+                    eventLogStatus.className = 'status success';
+                }
             } catch (err) {
-                eventLogStatus.textContent = 'Failed to clear event log.';
-                eventLogStatus.className = 'status error';
+                if (eventLogStatus) {
+                    eventLogStatus.textContent = 'Failed to clear event log.';
+                    eventLogStatus.className = 'status error';
+                }
             }
 
             setTimeout(() => {
-                eventLogStatus.className = 'status';
+                if (eventLogStatus) eventLogStatus.className = 'status';
             }, 3000);
         });
     }
@@ -798,14 +1007,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 loadEvents();
             }
             if (this.getAttribute('data-tab') === 'community') {
-                // Clear previous search results when switching to community tab
-                document.getElementById('users-grid').innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-users"></i>
-                        <h3>Search for Users</h3>
-                        <p>Use the search bar above to find other users on the platform.</p>
-                    </div>
-                `;
+                const grid = document.getElementById('users-grid');
+                if (grid) {
+                    grid.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-users"></i>
+                            <h3>Search for Users</h3>
+                            <p>Use the search bar above to find other users on the platform.</p>
+                        </div>
+                    `;
+                }
             }
         });
     });
@@ -820,16 +1031,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
             this.classList.add('active');
             const category = this.getAttribute('data-category');
-            document.getElementById(`${category}-content`).classList.add('active');
+            const el = document.getElementById(`${category}-content`);
+            if (el) el.classList.add('active');
         });
     });
 
-    // ===== GLOBAL AUTH STATE HANDLER =====
+    // ===== GLOBAL AUTH STATE HANDLER (with live account updates + deleted enforcement) =====
     function checkLoginStatus() {
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 try {
                     const uid = user.uid;
+
+                    // Stop old live listener first
+                    if (typeof liveAccountUnsub === 'function') {
+                        try { liveAccountUnsub(); } catch (e) {}
+                        liveAccountUnsub = null;
+                    }
+
                     const snap = await get(ref(db, `accounts/${uid}`));
                     if (!snap.exists()) {
                         currentUserUid = null;
@@ -837,29 +1056,59 @@ document.addEventListener('DOMContentLoaded', function () {
                         showLoginPage();
                         return;
                     }
-                    
+
                     const accountData = snap.val() || {};
-                    
-                    // Check if account is deleted
+
+                    // Check deleted immediately
                     if (accountData.deleted === true) {
                         await showMessagePopup(
                             'Account Deleted',
                             'This account has been deleted by moderators. Please contact support if you believe this is a mistake.'
                         );
-                        await signOut(auth);
+                        await safeSignOut();
                         currentUserUid = null;
                         currentAccount = null;
                         showLoginPage();
                         return;
                     }
-                    
+
                     currentUserUid = uid;
                     currentAccount = accountData;
 
                     sessionStorage.setItem('ogwXbet_currentUser', currentAccount.username || '');
                     sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime().toString());
 
+                    // Live account listener: force logout immediately if deleted while online
+                    liveAccountUnsub = onValue(ref(db, `accounts/${uid}`), async (s) => {
+                        if (!s.exists()) return;
+                        const acc = s.val() || {};
+                        currentAccount = acc;
+
+                        // Deleted -> force logout
+                        if (acc.deleted === true) {
+                            await showMessagePopup(
+                                'Account Deleted',
+                                'Your account was deleted by moderators.'
+                            );
+                            await doLogoutToLogin(true);
+                            return;
+                        }
+
+                        // Keep userSearch in sync if profile changed (best-effort)
+                        if (currentUserUid && currentAccount) {
+                            try {
+                                await initializeUserSearch();
+                            } catch (e) {}
+                        }
+
+                        // Update UI bits if needed
+                        try {
+                            updateAccountInfo();
+                        } catch (e) {}
+                    });
+
                     showDashboard();
+
                 } catch (e) {
                     console.error('Failed to load account profile:', e);
                     currentUserUid = null;
@@ -867,6 +1116,20 @@ document.addEventListener('DOMContentLoaded', function () {
                     showLoginPage();
                 }
             } else {
+                // Logged out
+                if (typeof liveAccountUnsub === 'function') {
+                    try { liveAccountUnsub(); } catch (e) {}
+                    liveAccountUnsub = null;
+                }
+                if (typeof liveThreadsUnsub === 'function') {
+                    try { liveThreadsUnsub(); } catch (e) {}
+                    liveThreadsUnsub = null;
+                }
+                if (typeof liveMessagesUnsub === 'function') {
+                    try { liveMessagesUnsub(); } catch (e) {}
+                    liveMessagesUnsub = null;
+                }
+
                 currentUserUid = null;
                 currentAccount = null;
                 showLoginPage();
@@ -874,32 +1137,74 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== NEW: INITIALIZE USER SEARCH DATA =====
+    async function safeSignOut() {
+        try { await signOut(auth); } catch (e) {}
+    }
+
+    async function doLogoutToLogin(skipPopup) {
+        try {
+            await safeSignOut();
+        } catch (e) {
+            console.error('Logout error:', e);
+        }
+        sessionStorage.removeItem('ogwXbet_currentUser');
+        sessionStorage.removeItem('ogwXbet_loginTime');
+
+        currentUserUid = null;
+        currentAccount = null;
+
+        // Cleanup live listeners
+        if (typeof liveAccountUnsub === 'function') {
+            try { liveAccountUnsub(); } catch (e) {}
+            liveAccountUnsub = null;
+        }
+        stopThreadsListener();
+        stopMessagesListener();
+
+        // Close chat overlay too
+        try { closeChatOverlay(); } catch (e) {}
+
+        if (!skipPopup) {
+            // no popup
+        }
+
+        showLoginPage();
+    }
+
+    // ===== INITIALIZE USER SEARCH DATA =====
     async function initializeUserSearch() {
         if (!currentUserUid || !currentAccount) return;
-        
+
         try {
-            // Check if user search data exists
+            const profile = currentAccount.profile || {};
+            const privacy = normalizePrivacy((profile && profile.privacy) || {});
+            // ensure stored privacy includes showChats
+            const mergedProfile = {
+                picture: profile.picture || "",
+                bio: profile.bio || "",
+                privacy: {
+                    showReputation: privacy.showReputation,
+                    showBets: privacy.showBets,
+                    showPredictions: privacy.showPredictions,
+                    showChats: privacy.showChats
+                }
+            };
+
+            const payload = {
+                username: currentAccount.username,
+                creationDate: currentAccount.creationDate,
+                profile: mergedProfile
+            };
+
             const searchSnap = await get(ref(db, `userSearch/${currentUserUid}`));
-            
             if (!searchSnap.exists()) {
-                // Create initial search data
-                await set(ref(db, `userSearch/${currentUserUid}`), {
-                    username: currentAccount.username,
-                    creationDate: currentAccount.creationDate,
-                    profile: currentAccount.profile || {}
-                });
+                await set(ref(db, `userSearch/${currentUserUid}`), payload);
             } else {
-                // Update existing search data if needed
-                const searchData = searchSnap.val();
-                if (searchData.username !== currentAccount.username || 
-                    JSON.stringify(searchData.profile) !== JSON.stringify(currentAccount.profile || {})) {
-                    
-                    await set(ref(db, `userSearch/${currentUserUid}`), {
-                        username: currentAccount.username,
-                        creationDate: currentAccount.creationDate,
-                        profile: currentAccount.profile || {}
-                    });
+                const existing = searchSnap.val() || {};
+                const existingStr = JSON.stringify(existing || {});
+                const payloadStr = JSON.stringify(payload || {});
+                if (existingStr !== payloadStr) {
+                    await set(ref(db, `userSearch/${currentUserUid}`), payload);
                 }
             }
         } catch (err) {
@@ -907,14 +1212,15 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== PHASE 1: UPDATED PROFILE FUNCTIONS =====
+    // ===== PROFILE FUNCTIONS =====
     function updateProfilePicture() {
         const pictureUrl = document.getElementById('profile-picture-url').value.trim();
         const preview = document.getElementById('profile-picture-preview');
         const placeholder = document.getElementById('profile-picture-placeholder');
-        
+
+        if (!preview || !placeholder || !profileStatus) return;
+
         if (!pictureUrl) {
-            // No URL - show placeholder
             preview.style.display = 'none';
             placeholder.style.display = 'flex';
             profileStatus.textContent = 'Picture removed. Using placeholder.';
@@ -925,22 +1231,20 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        // Basic URL validation
         if (!pictureUrl.startsWith('http')) {
             profileStatus.textContent = 'Please enter a valid URL starting with http:// or https://';
             profileStatus.className = 'status error';
             return;
         }
 
-        // Update preview
-        preview.onerror = function() {
+        preview.onerror = function () {
             preview.style.display = 'none';
             placeholder.style.display = 'flex';
             profileStatus.textContent = 'Failed to load image from this URL. Using placeholder.';
             profileStatus.className = 'status error';
         };
-        
-        preview.onload = function() {
+
+        preview.onload = function () {
             preview.style.display = 'block';
             placeholder.style.display = 'none';
             profileStatus.textContent = 'Picture updated successfully!';
@@ -949,64 +1253,70 @@ document.addEventListener('DOMContentLoaded', function () {
                 profileStatus.className = 'status';
             }, 3000);
         };
-        
+
         preview.src = pictureUrl;
     }
 
-    // ===== UPDATED: SAVE PROFILE SETTINGS WITH USERSEARCH SYNC =====
+    // ===== SAVE PROFILE SETTINGS (includes chat privacy) =====
     async function saveProfileSettings() {
         if (!currentAccount || !currentUserUid) return;
 
-        profileStatus.textContent = '';
-        profileStatus.className = 'status';
+        if (profileStatus) {
+            profileStatus.textContent = '';
+            profileStatus.className = 'status';
+        }
 
         try {
-            // Get current values
             const pictureUrl = document.getElementById('profile-picture-url').value.trim();
             const bio = document.getElementById('user-bio').value.trim();
-            const showReputation = document.getElementById('privacy-reputation').checked;
-            const showBets = document.getElementById('privacy-bets').checked;
-            const showPredictions = document.getElementById('privacy-predictions').checked;
 
-            // Update current account object
+            const showReputation = document.getElementById('privacy-reputation')?.checked ?? true;
+            const showBets = document.getElementById('privacy-bets')?.checked ?? true;
+            const showPredictions = document.getElementById('privacy-predictions')?.checked ?? true;
+            const showChats = document.getElementById('privacy-chats')?.checked ?? true;
+
             currentAccount.profile = {
                 picture: pictureUrl,
                 bio: bio,
                 privacy: {
-                    showReputation: showReputation,
-                    showBets: showBets,
-                    showPredictions: showPredictions
+                    showReputation,
+                    showBets,
+                    showPredictions,
+                    showChats
                 }
             };
 
-            // Save to Firebase accounts
             await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
 
-            // NEW: Also update user search data
             await set(ref(db, `userSearch/${currentUserUid}`), {
                 username: currentAccount.username,
                 creationDate: currentAccount.creationDate,
                 profile: currentAccount.profile
             });
 
-            profileStatus.textContent = 'Profile settings saved successfully!';
-            profileStatus.className = 'status success';
-
-            setTimeout(() => {
-                profileStatus.className = 'status';
-            }, 3000);
+            if (profileStatus) {
+                profileStatus.textContent = 'Profile settings saved successfully!';
+                profileStatus.className = 'status success';
+                setTimeout(() => {
+                    profileStatus.className = 'status';
+                }, 3000);
+            }
 
         } catch (err) {
             console.error('Failed to save profile settings:', err);
-            profileStatus.textContent = 'Failed to save profile settings. Please try again.';
-            profileStatus.className = 'status error';
+            if (profileStatus) {
+                profileStatus.textContent = 'Failed to save profile settings. Please try again.';
+                profileStatus.className = 'status error';
+            }
         }
     }
 
-    // ===== UPDATED: SEARCH FUNCTION USING USERSEARCH NODE =====
+    // ===== SEARCH USERS (respects blocks) =====
     async function searchUsers() {
         const searchTerm = document.getElementById('user-search').value.trim().toLowerCase();
         const usersGrid = document.getElementById('users-grid');
+
+        if (!usersGrid) return;
 
         if (!searchTerm) {
             usersGrid.innerHTML = `
@@ -1023,23 +1333,38 @@ document.addEventListener('DOMContentLoaded', function () {
             <div class="empty-state">
                 <i class="fas fa-spinner fa-spin"></i>
                 <h3>Searching...</h3>
-                <p>Looking for users matching "${searchTerm}"</p>
+                <p>Looking for users matching "${escapeHtml(searchTerm)}"</p>
             </div>
         `;
 
         try {
-            const snap = await get(userSearchRef);
-            const results = [];
+            const [searchSnap, blocksSnap] = await Promise.all([
+                get(userSearchRef),
+                get(blocksRef)
+            ]);
+            cachedBlocksAll = blocksSnap.exists() ? (blocksSnap.val() || {}) : {};
 
-            if (snap.exists()) {
-                snap.forEach(childSnap => {
+            const results = [];
+            cachedUserSearch = {};
+
+            if (searchSnap.exists()) {
+                searchSnap.forEach(childSnap => {
+                    const uid = childSnap.key;
                     const userData = childSnap.val() || {};
-                    // Check if username matches search
-                    if (userData.username && userData.username.toLowerCase().includes(searchTerm)) {
-                        results.push({
-                            uid: childSnap.key,
-                            ...userData
-                        });
+                    if (!userData.username) return;
+
+                    // Prevent showing yourself
+                    if (currentUserUid && uid === currentUserUid) return;
+
+                    // If this user has blocked me -> I must not find them
+                    const theyBlockedMe = !!(currentUserUid && cachedBlocksAll?.[uid]?.[currentUserUid]);
+                    if (theyBlockedMe) return;
+
+                    // Username match
+                    if (userData.username.toLowerCase().includes(searchTerm)) {
+                        const enriched = { uid, ...userData };
+                        results.push(enriched);
+                        cachedUserSearch[uid] = enriched;
                     }
                 });
             }
@@ -1049,45 +1374,54 @@ document.addEventListener('DOMContentLoaded', function () {
                     <div class="empty-state">
                         <i class="fas fa-user-times"></i>
                         <h3>No Users Found</h3>
-                        <p>No users found matching "${searchTerm}"</p>
+                        <p>No users found matching "${escapeHtml(searchTerm)}"</p>
                     </div>
                 `;
                 return;
             }
 
-            // Display results in 3-column grid - SIMPLIFIED WITHOUT PFP
-            let html = '<div class="users-grid-three-column">';
-            results.forEach(user => {
+            // Render using existing theme classes (.user-card)
+            let html = '';
+            results.forEach(u => {
+                const pic = u.profile && u.profile.picture ? u.profile.picture : '';
+                const joined = u.creationDate ? new Date(u.creationDate).toLocaleDateString() : 'Unknown';
+
+                const iBlocked = !!(currentUserUid && cachedBlocksAll?.[currentUserUid]?.[u.uid]);
+                const blockedBadge = iBlocked ? `<span class="profile-badge" style="margin-left:10px;"><i class="fas fa-ban"></i> Blocked</span>` : '';
+
                 html += `
-                    <div class="user-search-card">
-                        <div class="user-search-info">
-                            <div class="user-search-header">
-                                <div class="user-avatar-placeholder-search">
-                                    <i class="fas fa-user"></i>
+                    <div class="user-card">
+                        <div class="user-card-header">
+                            <div class="user-card-identity">
+                                <div class="user-card-avatar">
+                                    ${pic ? `<img src="${pic}" alt="${escapeHtml(u.username)}" onerror="this.style.display='none';">` : ''}
                                 </div>
-                                <div>
-                                    <h4>${user.username}</h4>
-                                    <p>Joined: ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}</p>
+                                <div style="min-width:0;">
+                                    <div class="user-card-name">${escapeHtml(u.username)} ${blockedBadge}</div>
+                                    <div class="user-card-meta">Joined: ${escapeHtml(joined)}</div>
                                 </div>
                             </div>
-                            <button class="btn btn-secondary view-profile-btn" data-user-id="${user.uid}">
-                                <i class="fas fa-eye"></i> View Profile
-                            </button>
+                            <div class="user-card-actions">
+                                <button class="btn btn-secondary view-profile-btn" data-user-id="${u.uid}">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="user-card-body">
+                            ${u.profile && u.profile.bio ? escapeHtml(u.profile.bio).slice(0, 140) : 'No bio set.'}
                         </div>
                     </div>
                 `;
             });
-            html += '</div>';
 
             usersGrid.innerHTML = html;
 
-            // Add event listeners to view profile buttons
             document.querySelectorAll('.view-profile-btn').forEach(btn => {
-                btn.addEventListener('click', function() {
+                btn.addEventListener('click', async function () {
                     const userId = this.getAttribute('data-user-id');
-                    const userData = results.find(user => user.uid === userId);
+                    const userData = results.find(x => x.uid === userId);
                     if (userData) {
-                        openUserProfilePopup(userData);
+                        await openUserProfilePopup(userData);
                     }
                 });
             });
@@ -1114,11 +1448,24 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function showStatus(message, type) {
+        if (!statusMessage) return;
         statusMessage.textContent = message;
         statusMessage.className = `status ${type}`;
         setTimeout(() => {
             statusMessage.className = 'status';
         }, 5000);
+    }
+
+    function setStatus(el, message, type, clearAfterMs) {
+        if (!el) return;
+        el.textContent = message || '';
+        el.className = `status ${type || ''}`.trim();
+        if (clearAfterMs) {
+            setTimeout(() => {
+                el.className = 'status';
+                el.textContent = '';
+            }, clearAfterMs);
+        }
     }
 
     function isCurrentUserModerator() {
@@ -1131,70 +1478,82 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        loginPage.style.display = 'none';
-        dashboardPage.style.display = 'block';
-        document.getElementById('username-display').textContent =
-            `Welcome, ${currentAccount.username || 'User'}`;
+        if (loginPage) loginPage.style.display = 'none';
+        if (dashboardPage) dashboardPage.style.display = 'block';
+
+        const ud = document.getElementById('username-display');
+        if (ud) ud.textContent = `Welcome, ${currentAccount.username || 'User'}`;
 
         if (currentAccount.isModerator) {
-            moderatorBadge.classList.remove('hidden');
-            adminNav.classList.remove('hidden');
+            if (moderatorBadge) moderatorBadge.classList.remove('hidden');
+            if (adminNav) adminNav.classList.remove('hidden');
         } else {
-            moderatorBadge.classList.add('hidden');
-            adminNav.classList.add('hidden');
+            if (moderatorBadge) moderatorBadge.classList.add('hidden');
+            if (adminNav) adminNav.classList.add('hidden');
         }
 
         loadEvents();
         updateAdminInfo();
         updateAccountInfo();
-        
-        // NEW: Initialize user search data
+
         initializeUserSearch();
+
+        // Start blocks listener for "my blocked" set (needed for chat+profile)
+        startMyBlocksListener();
+
+        // Start chat threads listener (for chat list)
+        startThreadsListener();
     }
 
     function showLoginPage() {
-        dashboardPage.style.display = 'none';
-        loginPage.style.display = 'flex';
+        if (dashboardPage) dashboardPage.style.display = 'none';
+        if (loginPage) loginPage.style.display = 'flex';
 
-        document.getElementById('login-username').value = '';
-        document.getElementById('login-token').value = '';
-        document.getElementById('login-token').type = 'password';
-        document.getElementById('toggle-token').querySelector('i').className = 'fas fa-eye';
-        loginStatus.textContent = '';
-        loginStatus.className = 'status';
+        const lu = document.getElementById('login-username');
+        const lt = document.getElementById('login-token');
+        if (lu) lu.value = '';
+        if (lt) {
+            lt.value = '';
+            lt.type = 'password';
+        }
 
-        accountCreationSection.classList.add('hidden');
-        loginSection.classList.remove('hidden');
+        const tbtn = document.getElementById('toggle-token');
+        if (tbtn && tbtn.querySelector('i')) tbtn.querySelector('i').className = 'fas fa-eye';
+
+        if (loginStatus) {
+            loginStatus.textContent = '';
+            loginStatus.className = 'status';
+        }
+
+        if (accountCreationSection) accountCreationSection.classList.add('hidden');
+        if (loginSection) loginSection.classList.remove('hidden');
     }
 
-    // ===== UPDATED: UPDATE ACCOUNT INFO WITH PROFILE FIELDS =====
+    // ===== UPDATE ACCOUNT INFO =====
     function updateAccountInfo() {
         if (!currentAccount) return;
 
-        document.getElementById('account-username').textContent = currentAccount.username || '-';
-        document.getElementById('account-creation-date').textContent =
-            currentAccount.creationDate ? new Date(currentAccount.creationDate).toLocaleDateString() : '-';
-        document.getElementById('total-bets').textContent =
-            Array.isArray(currentAccount.bets) ? currentAccount.bets.length : 0;
-        document.getElementById('winning-rate').textContent = '0%';
-
-        const reputation = typeof currentAccount.reputation === 'number'
-            ? currentAccount.reputation
-            : 0;
+        const au = document.getElementById('account-username');
+        const cd = document.getElementById('account-creation-date');
+        const tb = document.getElementById('total-bets');
+        const wr = document.getElementById('winning-rate');
         const repEl = document.getElementById('account-reputation');
-        if (repEl) {
-            repEl.textContent = reputation.toFixed(1);
-        }
 
-        // PHASE 1: Populate profile fields
+        if (au) au.textContent = currentAccount.username || '-';
+        if (cd) cd.textContent = currentAccount.creationDate ? new Date(currentAccount.creationDate).toLocaleDateString() : '-';
+        if (tb) tb.textContent = Array.isArray(currentAccount.bets) ? currentAccount.bets.length : 0;
+        if (wr) wr.textContent = '0%';
+
+        const reputation = typeof currentAccount.reputation === 'number' ? currentAccount.reputation : 0;
+        if (repEl) repEl.textContent = reputation.toFixed(1);
+
         const profile = currentAccount.profile || {};
-        const privacy = profile.privacy || {};
+        const privacy = normalizePrivacy((profile && profile.privacy) || {});
 
-        // Profile picture - handle placeholder
         const picturePreview = document.getElementById('profile-picture-preview');
         const placeholder = document.getElementById('profile-picture-placeholder');
         const pictureUrlInput = document.getElementById('profile-picture-url');
-        
+
         if (picturePreview && placeholder && pictureUrlInput) {
             if (profile.picture) {
                 picturePreview.src = profile.picture;
@@ -1207,25 +1566,22 @@ document.addEventListener('DOMContentLoaded', function () {
             pictureUrlInput.value = profile.picture || '';
         }
 
-        // Bio
         const bioInput = document.getElementById('user-bio');
-        if (bioInput) {
-            bioInput.value = profile.bio || '';
-        }
+        if (bioInput) bioInput.value = profile.bio || '';
 
-        // Privacy settings
         const reputationCheckbox = document.getElementById('privacy-reputation');
         const betsCheckbox = document.getElementById('privacy-bets');
         const predictionsCheckbox = document.getElementById('privacy-predictions');
-        
-        if (reputationCheckbox) reputationCheckbox.checked = privacy.showReputation !== false;
-        if (betsCheckbox) betsCheckbox.checked = privacy.showBets !== false;
-        if (predictionsCheckbox) predictionsCheckbox.checked = privacy.showPredictions !== false;
+        const chatsCheckbox = document.getElementById('privacy-chats');
+
+        if (reputationCheckbox) reputationCheckbox.checked = privacy.showReputation;
+        if (betsCheckbox) betsCheckbox.checked = privacy.showBets;
+        if (predictionsCheckbox) predictionsCheckbox.checked = privacy.showPredictions;
+        if (chatsCheckbox) chatsCheckbox.checked = privacy.showChats;
 
         renderPredictionsList(currentAccount);
     }
-
-    // ===== UPDATED ADMIN INFO =====
+    // ===== UPDATED ADMIN INFO (account tables stay working) =====
     async function updateAdminInfo() {
         if (!currentAccount || !currentAccount.isModerator) {
             return;
@@ -1242,26 +1598,22 @@ document.addEventListener('DOMContentLoaded', function () {
                 snap.forEach(childSnap => {
                     const uid = childSnap.key;
                     const acc = childSnap.val() || {};
-                    
+
                     if (acc.deleted === true) {
                         deletedUserCount++;
                         const uname = acc.username || '(unknown)';
-                        const created = acc.creationDate
-                            ? new Date(acc.creationDate).toLocaleDateString()
-                            : '-';
-                        const deletedAt = acc.deletedAt
-                            ? new Date(acc.deletedAt).toLocaleString()
-                            : '-';
+                        const created = acc.creationDate ? new Date(acc.creationDate).toLocaleDateString() : '-';
+                        const deletedAt = acc.deletedAt ? new Date(acc.deletedAt).toLocaleString() : '-';
                         const deletedBy = acc.deletedBy || 'Unknown';
 
                         deletedAccountsHTML += `
                             <tr>
-                                <td>${uname}</td>
-                                <td>${created}</td>
-                                <td>${deletedAt}</td>
-                                <td>${deletedBy}</td>
+                                <td>${escapeHtml(uname)}</td>
+                                <td>${escapeHtml(created)}</td>
+                                <td>${escapeHtml(deletedAt)}</td>
+                                <td>${escapeHtml(deletedBy)}</td>
                                 <td>
-                                    <button class="btn-restore-account" data-uid="${uid}" data-username="${uname}">
+                                    <button class="btn-restore-account" data-uid="${uid}" data-username="${escapeHtml(uname)}">
                                         <i class="fas fa-undo"></i> Restore
                                     </button>
                                 </td>
@@ -1270,17 +1622,15 @@ document.addEventListener('DOMContentLoaded', function () {
                     } else {
                         userCount++;
                         const uname = acc.username || '(unknown)';
-                        const created = acc.creationDate
-                            ? new Date(acc.creationDate).toLocaleDateString()
-                            : '-';
+                        const created = acc.creationDate ? new Date(acc.creationDate).toLocaleDateString() : '-';
 
                         activeAccountsHTML += `
                             <tr>
-                                <td>${uname}</td>
-                                <td>${created}</td>
+                                <td>${escapeHtml(uname)}</td>
+                                <td>${escapeHtml(created)}</td>
                                 <td>${acc.isModerator ? '<span class="moderator-badge">MODERATOR</span>' : 'User'}</td>
                                 <td>
-                                    <button class="btn-delete-account" data-uid="${uid}" data-username="${uname}">
+                                    <button class="btn-delete-account" data-uid="${uid}" data-username="${escapeHtml(uname)}">
                                         <i class="fas fa-trash"></i> Delete
                                     </button>
                                 </td>
@@ -1293,39 +1643,45 @@ document.addEventListener('DOMContentLoaded', function () {
             console.error('Failed to load accounts for admin panel:', err);
         }
 
-        document.getElementById('total-users').textContent = userCount;
-        document.getElementById('deleted-users').textContent = deletedUserCount;
+        const tu = document.getElementById('total-users');
+        const du = document.getElementById('deleted-users');
+        if (tu) tu.textContent = userCount;
+        if (du) du.textContent = deletedUserCount;
 
         try {
             const events = window.latestEvents || [];
-            document.getElementById('total-events').textContent = events.length;
-            document.getElementById('active-bets').textContent = '0';
+            const te = document.getElementById('total-events');
+            const ab = document.getElementById('active-bets');
+            if (te) te.textContent = events.length;
+            if (ab) ab.textContent = '0';
         } catch (error) {
-            document.getElementById('total-events').textContent = '0';
-            document.getElementById('active-bets').textContent = '0';
+            const te = document.getElementById('total-events');
+            const ab = document.getElementById('active-bets');
+            if (te) te.textContent = '0';
+            if (ab) ab.textContent = '0';
         }
 
-        // Update active accounts table
-        document.getElementById('accounts-table-body').innerHTML =
-            activeAccountsHTML ||
-            `
-            <tr>
-                <td colspan="4" style="text-align: center; color: var(--text-secondary);">No active accounts found</td>
-            </tr>
-        `;
+        const activeBody = document.getElementById('accounts-table-body');
+        const deletedBody = document.getElementById('deleted-accounts-table-body');
 
-        // Update deleted accounts table
-        document.getElementById('deleted-accounts-table-body').innerHTML =
-            deletedAccountsHTML ||
-            `
-            <tr>
-                <td colspan="5" style="text-align: center; color: var(--text-secondary);">No deleted accounts found</td>
-            </tr>
-        `;
+        if (activeBody) {
+            activeBody.innerHTML = activeAccountsHTML || `
+                <tr>
+                    <td colspan="4" style="text-align: center; color: var(--text-secondary);">No active accounts found</td>
+                </tr>
+            `;
+        }
 
-        // Add event listeners for delete/restore buttons
+        if (deletedBody) {
+            deletedBody.innerHTML = deletedAccountsHTML || `
+                <tr>
+                    <td colspan="5" style="text-align: center; color: var(--text-secondary);">No deleted accounts found</td>
+                </tr>
+            `;
+        }
+
         document.querySelectorAll('.btn-delete-account').forEach(btn => {
-            btn.addEventListener('click', function() {
+            btn.addEventListener('click', function () {
                 const uid = this.getAttribute('data-uid');
                 const username = this.getAttribute('data-username');
                 deleteAccount(uid, username);
@@ -1333,7 +1689,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         document.querySelectorAll('.btn-restore-account').forEach(btn => {
-            btn.addEventListener('click', function() {
+            btn.addEventListener('click', function () {
                 const uid = this.getAttribute('data-uid');
                 const username = this.getAttribute('data-username');
                 restoreAccount(uid, username);
@@ -1345,7 +1701,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== UPDATED: DELETE ACCOUNT WITH USERSEARCH REMOVAL =====
     async function deleteAccount(uid, username) {
         if (!isCurrentUserModerator()) return;
 
@@ -1359,37 +1714,29 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!confirmDelete) return;
 
         try {
-            // Mark account as deleted instead of removing it
-            const updates = {
+            const updatesObj = {
                 deleted: true,
                 deletedAt: new Date().toISOString(),
                 deletedBy: currentAccount.username || 'Unknown Moderator'
             };
 
-            await update(ref(db, `accounts/${uid}`), updates);
+            await update(ref(db, `accounts/${uid}`), updatesObj);
 
-            // NEW: Remove from user search
             await remove(ref(db, `userSearch/${uid}`));
 
-            // Show success message
             await showMessagePopup(
                 'Account Deleted',
                 `Account "${username}" has been successfully deleted. The user will be logged out if currently active.`
             );
 
-            // Refresh admin info to show updated tables
             updateAdminInfo();
 
         } catch (err) {
             console.error('Failed to delete account:', err);
-            await showMessagePopup(
-                'Error',
-                'Failed to delete account. Please try again.'
-            );
+            await showMessagePopup('Error', 'Failed to delete account. Please try again.');
         }
     }
 
-    // ===== UPDATED: RESTORE ACCOUNT WITH USERSEARCH ADDITION =====
     async function restoreAccount(uid, username) {
         if (!isCurrentUserModerator()) return;
 
@@ -1403,45 +1750,37 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!confirmRestore) return;
 
         try {
-            // Get the account data first
             const accountSnap = await get(ref(db, `accounts/${uid}`));
             if (!accountSnap.exists()) {
                 throw new Error('Account not found');
             }
-            
+
             const accountData = accountSnap.val();
 
-            // Remove deletion markers to restore account
-            const updates = {
+            const updatesObj = {
                 deleted: false,
                 deletedAt: null,
                 deletedBy: null
             };
 
-            await update(ref(db, `accounts/${uid}`), updates);
+            await update(ref(db, `accounts/${uid}`), updatesObj);
 
-            // NEW: Add back to user search
             await set(ref(db, `userSearch/${uid}`), {
                 username: accountData.username,
                 creationDate: accountData.creationDate,
                 profile: accountData.profile || {}
             });
 
-            // Show success message
             await showMessagePopup(
                 'Account Restored',
                 `Account "${username}" has been successfully restored. The user can now log in again.`
             );
 
-            // Refresh admin info to show updated tables
             updateAdminInfo();
 
         } catch (err) {
             console.error('Failed to restore account:', err);
-            await showMessagePopup(
-                'Error',
-                'Failed to restore account. Please try again.'
-            );
+            await showMessagePopup('Error', 'Failed to restore account. Please try again.');
         }
     }
 
@@ -1459,11 +1798,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
         let html = '';
         predictions.forEach(pred => {
-            // Determine status based on correct field and event status
             let status = 'pending';
             let statusLabel = 'Pending';
-            
-            // Check if prediction has been resolved
+
             if (pred.correct === true) {
                 status = 'correct';
                 statusLabel = 'Correct';
@@ -1471,15 +1808,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 status = 'wrong';
                 statusLabel = 'Wrong';
             } else {
-                // If not resolved, check if event exists in ended events
                 const events = window.latestEvents || [];
                 const endedEvent = events.find(ev => ev.id === pred.eventId && ev.category === 'ended');
                 if (endedEvent) {
-                    // Event ended but prediction not resolved - show as pending resolution
                     status = 'pending';
                     statusLabel = 'Pending Resolution';
                 } else {
-                    // Event still active/upcoming
                     status = 'pending';
                     statusLabel = 'Pending';
                 }
@@ -1490,11 +1824,11 @@ document.addEventListener('DOMContentLoaded', function () {
             html += `
                 <div class="prediction-item">
                     <div class="prediction-header">
-                        <span class="prediction-event">${pred.title || 'Event'}</span>
-                        <span class="prediction-choice">You picked: ${choice}</span>
+                        <span class="prediction-event">${escapeHtml(pred.title || 'Event')}</span>
+                        <span class="prediction-choice">You picked: ${escapeHtml(choice)}</span>
                     </div>
                     <div class="prediction-status ${status}">
-                        Status: ${statusLabel}
+                        Status: ${escapeHtml(statusLabel)}
                     </div>
                 </div>
             `;
@@ -1505,9 +1839,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // ===== DISPLAY EVENTS WITH PREDICTION STATUS =====
     window.displayFirebaseEvents = function (events) {
-        document.getElementById('upcoming-events').innerHTML = '';
-        document.getElementById('active-events').innerHTML = '';
-        document.getElementById('ended-events').innerHTML = '';
+        const up = document.getElementById('upcoming-events');
+        const ac = document.getElementById('active-events');
+        const en = document.getElementById('ended-events');
+
+        if (up) up.innerHTML = '';
+        if (ac) ac.innerHTML = '';
+        if (en) en.innerHTML = '';
 
         if (!events || events.length === 0) {
             const emptyHTML = `
@@ -1517,9 +1855,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     <p>Check back later for OGW events.</p>
                 </div>
             `;
-            document.getElementById('upcoming-events').innerHTML = emptyHTML;
-            document.getElementById('active-events').innerHTML = emptyHTML;
-            document.getElementById('ended-events').innerHTML = emptyHTML;
+            if (up) up.innerHTML = emptyHTML;
+            if (ac) ac.innerHTML = emptyHTML;
+            if (en) en.innerHTML = emptyHTML;
             return;
         }
 
@@ -1527,12 +1865,12 @@ document.addEventListener('DOMContentLoaded', function () {
         const active = events.filter(event => event.category === 'active');
         const ended = events.filter(event => event.category === 'ended');
 
-        displayEvents(upcoming, document.getElementById('upcoming-events'), 'upcoming');
-        displayEvents(active, document.getElementById('active-events'), 'active');
-        displayEvents(ended, document.getElementById('ended-events'), 'ended');
+        if (up) displayEvents(upcoming, up, 'upcoming');
+        if (ac) displayEvents(active, ac, 'active');
+        if (en) displayEvents(ended, en, 'ended');
 
-        if (upcoming.length === 0) {
-            document.getElementById('upcoming-events').innerHTML = `
+        if (up && upcoming.length === 0) {
+            up.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-calendar-times"></i>
                     <h3>No Upcoming Events</h3>
@@ -1540,8 +1878,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
             `;
         }
-        if (active.length === 0) {
-            document.getElementById('active-events').innerHTML = `
+        if (ac && active.length === 0) {
+            ac.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-calendar-times"></i>
                     <h3>No Active Events</h3>
@@ -1549,8 +1887,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
             `;
         }
-        if (ended.length === 0) {
-            document.getElementById('ended-events').innerHTML = `
+        if (en && ended.length === 0) {
+            en.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-calendar-times"></i>
                     <h3>No Ended Events</h3>
@@ -1569,7 +1907,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== DISPLAY EVENTS WITH VISUAL PREDICTION STATES =====
     function displayEvents(events, container, category) {
         if (!events || events.length === 0) return;
         const isMod = isCurrentUserModerator();
@@ -1580,76 +1917,73 @@ document.addEventListener('DOMContentLoaded', function () {
                 ? `<div class="event-menu" data-event-id="${event.id}"><i class="fas fa-ellipsis-v"></i></div>`
                 : '';
 
-            // Get user's prediction for this event if exists
-            const userPrediction = currentAccount && Array.isArray(currentAccount.predictions) 
+            const userPrediction = currentAccount && Array.isArray(currentAccount.predictions)
                 ? currentAccount.predictions.find(p => p.eventId === event.id)
                 : null;
 
-            // Show prediction status in ended events
-            const predictionStatusHTML = category === 'ended' && userPrediction 
+            const predictionStatusHTML = category === 'ended' && userPrediction
                 ? `<div class="prediction-result ${userPrediction.correct ? 'correct' : 'wrong'}">
-                      <strong>Your Prediction:</strong> ${userPrediction.choice === 'A' ? event.teamA : event.teamB} 
+                      <strong>Your Prediction:</strong> ${escapeHtml(userPrediction.choice === 'A' ? event.teamA : event.teamB)}
                       <span style="margin-left: 8px;">
                           ${userPrediction.correct ? '✓ Correct' : '✗ Wrong'}
                       </span>
                    </div>`
                 : '';
 
-            // Determine button styles based on user's prediction
             const isPredictedA = userPrediction && userPrediction.choice === 'A';
             const isPredictedB = userPrediction && userPrediction.choice === 'B';
-            
-            const buttonStyleA = isPredictedA ? 
-                'style="background-color: var(--success); color: white; border-color: var(--success);"' : 
-                'style="background-color: rgba(255, 255, 255, 0.04); color: var(--text-secondary); border-color: rgba(255, 255, 255, 0.1);"';
-            
-            const buttonStyleB = isPredictedB ? 
-                'style="background-color: var(--success); color: white; border-color: var(--success);"' : 
-                'style="background-color: rgba(255, 255, 255, 0.04); color: var(--text-secondary); border-color: rgba(255, 255, 255, 0.1);"';
+
+            const buttonStyleA = isPredictedA
+                ? 'style="background-color: var(--success); color: white; border-color: var(--success);"'
+                : 'style="background-color: rgba(255, 255, 255, 0.04); color: var(--text-secondary); border-color: rgba(255, 255, 255, 0.1);"';
+
+            const buttonStyleB = isPredictedB
+                ? 'style="background-color: var(--success); color: white; border-color: var(--success);"'
+                : 'style="background-color: rgba(255, 255, 255, 0.04); color: var(--text-secondary); border-color: rgba(255, 255, 255, 0.1);"';
 
             eventsHTML += `
                 <div class="event-card" data-event-id="${event.id}">
                     <div class="event-header">
                         <div>
-                            <h3 class="event-title">${event.title}</h3>
-                            <div class="event-date">Starts: ${new Date(event.date).toLocaleString()}</div>
+                            <h3 class="event-title">${escapeHtml(event.title)}</h3>
+                            <div class="event-date">Starts: ${escapeHtml(new Date(event.date).toLocaleString())}</div>
                         </div>
                         ${menuHTML}
                     </div>
                     <div class="event-body">
                         <div class="event-teams">
                             <div class="team">
-                                <div class="team-logo">${event.teamA.charAt(0)}</div>
-                                <div>${event.teamA}</div>
+                                <div class="team-logo">${escapeHtml(event.teamA.charAt(0))}</div>
+                                <div>${escapeHtml(event.teamA)}</div>
                             </div>
                             <div class="vs">VS</div>
                             <div class="team">
-                                <div class="team-logo">${event.teamB.charAt(0)}</div>
-                                <div>${event.teamB}</div>
+                                <div class="team-logo">${escapeHtml(event.teamB.charAt(0))}</div>
+                                <div>${escapeHtml(event.teamB)}</div>
                             </div>
                         </div>
                         <div class="event-odds">
                             <div class="odd">
-                                <div>${event.teamA}</div>
-                                <div class="odd-value">${event.oddsA}</div>
+                                <div>${escapeHtml(event.teamA)}</div>
+                                <div class="odd-value">${escapeHtml(String(event.oddsA))}</div>
                             </div>
                             <div class="odd">
                                 <div>Draw</div>
-                                <div class="odd-value">${event.oddsDraw}</div>
+                                <div class="odd-value">${escapeHtml(String(event.oddsDraw))}</div>
                             </div>
                             <div class="odd">
-                                <div>${event.teamB}</div>
-                                <div class="odd-value">${event.oddsB}</div>
+                                <div>${escapeHtml(event.teamB)}</div>
+                                <div class="odd-value">${escapeHtml(String(event.oddsB))}</div>
                             </div>
                         </div>
                         ${predictionStatusHTML}
                         ${category !== 'ended' ? `
                         <div class="prediction-actions">
                             <button class="predict-btn" data-event-id="${event.id}" data-choice="A" ${buttonStyleA}>
-                                Predict ${event.teamA} win
+                                Predict ${escapeHtml(event.teamA)} win
                             </button>
                             <button class="predict-btn" data-event-id="${event.id}" data-choice="B" ${buttonStyleB}>
-                                Predict ${event.teamB} win
+                                Predict ${escapeHtml(event.teamB)} win
                             </button>
                         </div>
                         ` : ''}
@@ -1661,7 +1995,6 @@ document.addEventListener('DOMContentLoaded', function () {
         container.innerHTML = eventsHTML;
     }
 
-    // Event delegation for moderator 3-dots menu and predictions
     document.addEventListener('click', function (e) {
         const menuBtn = e.target.closest('.event-menu');
         if (menuBtn && isCurrentUserModerator()) {
@@ -1673,12 +2006,11 @@ document.addEventListener('DOMContentLoaded', function () {
         const predictBtn = e.target.closest('.predict-btn');
         if (predictBtn) {
             const eventId = predictBtn.getAttribute('data-event-id');
-            const choice = predictBtn.getAttribute('data-choice'); // "A" or "B"
+            const choice = predictBtn.getAttribute('data-choice');
             handlePrediction(eventId, choice);
         }
     });
 
-    // ===== EVENT MENU WITH 3 OPTIONS =====
     async function handleEventMenu(eventId) {
         const action = await showChoicePopup(
             'Event Actions',
@@ -1705,75 +2037,31 @@ document.addEventListener('DOMContentLoaded', function () {
         return events.find(ev => ev.id === eventId);
     }
 
-    // ===== SINGLE-FORM EDIT FUNCTION =====
     async function editEventFull(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
 
         const formFields = [
+            { name: 'title', label: 'Event Title', type: 'text', value: eventObj.title || '' },
+            { name: 'teamA', label: 'Team A', type: 'text', value: eventObj.teamA || '' },
+            { name: 'teamB', label: 'Team B', type: 'text', value: eventObj.teamB || '' },
+            { name: 'date', label: 'Event Date & Time', type: 'datetime-local', value: eventObj.date || '' },
             {
-                name: 'title',
-                label: 'Event Title',
-                type: 'text',
-                value: eventObj.title || ''
-            },
-            {
-                name: 'teamA',
-                label: 'Team A',
-                type: 'text',
-                value: eventObj.teamA || ''
-            },
-            {
-                name: 'teamB',
-                label: 'Team B',
-                type: 'text',
-                value: eventObj.teamB || ''
-            },
-            {
-                name: 'date',
-                label: 'Event Date & Time',
-                type: 'datetime-local',
-                value: eventObj.date || ''
-            },
-            {
-                name: 'category',
-                label: 'Category',
-                type: 'select',
-                value: eventObj.category || 'upcoming',
+                name: 'category', label: 'Category', type: 'select', value: eventObj.category || 'upcoming',
                 options: [
                     { label: 'Upcoming', value: 'upcoming' },
                     { label: 'Active', value: 'active' },
                     { label: 'Ended', value: 'ended' }
                 ]
             },
-            {
-                name: 'oddsA',
-                label: 'Odds Team A',
-                type: 'number',
-                value: eventObj.oddsA || 2.10,
-                placeholder: '2.10'
-            },
-            {
-                name: 'oddsDraw',
-                label: 'Odds Draw',
-                type: 'number',
-                value: eventObj.oddsDraw || 3.25,
-                placeholder: '3.25'
-            },
-            {
-                name: 'oddsB',
-                label: 'Odds Team B',
-                type: 'number',
-                value: eventObj.oddsB || 2.80,
-                placeholder: '2.80'
-            }
+            { name: 'oddsA', label: 'Odds Team A', type: 'number', value: eventObj.oddsA || 2.10, placeholder: '2.10' },
+            { name: 'oddsDraw', label: 'Odds Draw', type: 'number', value: eventObj.oddsDraw || 3.25, placeholder: '3.25' },
+            { name: 'oddsB', label: 'Odds Team B', type: 'number', value: eventObj.oddsB || 2.80, placeholder: '2.80' }
         ];
 
         const result = await showFormPopup('Edit Event', formFields, 'Save Changes', 'Cancel');
-        
         if (!result) return;
 
-        // Update event object with new values
         Object.keys(result).forEach(key => {
             if (key === 'oddsA' || key === 'oddsDraw' || key === 'oddsB') {
                 eventObj[key] = parseFloat(result[key]) || eventObj[key];
@@ -1794,7 +2082,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== SMART MOVE FUNCTION WITH PROPER PREDICTION RESOLUTION =====
     async function moveEventSmart(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -1810,7 +2097,6 @@ document.addEventListener('DOMContentLoaded', function () {
         );
         if (!newCategory) return;
 
-        // If moving to ended, we need to resolve predictions
         if (newCategory === 'ended') {
             const winnerChoice = await showChoicePopup(
                 'End Event & Resolve Predictions',
@@ -1822,21 +2108,13 @@ document.addEventListener('DOMContentLoaded', function () {
             );
             if (!winnerChoice) return;
 
-            console.log('Resolving predictions for event:', eventObj.title, 'Winner:', winnerChoice);
-
-            // Resolve predictions and award reputation
             await resolveEventPredictions(eventObj, winnerChoice);
 
-            // Show success message
-            await showMessagePopup(
-                'Predictions Resolved', 
-                `Event ended! Reputation has been awarded to users with correct predictions.`
-            );
+            await showMessagePopup('Predictions Resolved', `Event ended! Reputation has been awarded to users with correct predictions.`);
 
-            // Log to eventLog
             const winnerName = winnerChoice === 'A' ? eventObj.teamA : eventObj.teamB;
             const moderatorName = currentAccount && currentAccount.username ? currentAccount.username : 'Unknown';
-            
+
             const logEntry = {
                 id: eventObj.id,
                 title: eventObj.title,
@@ -1855,7 +2133,6 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        // Update event category
         eventObj.category = newCategory;
         const key = window.eventKeyMap[eventId];
         if (!key) return;
@@ -1863,8 +2140,7 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             await set(ref(db, `events/${key}`), eventObj);
             await showMessagePopup('Success', `Event moved to ${newCategory} successfully!`);
-            
-            // Force refresh account info to show updated prediction status
+
             if (currentUserUid) {
                 const snap = await get(ref(db, `accounts/${currentUserUid}`));
                 if (snap.exists()) {
@@ -1878,7 +2154,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== DELETE EVENT FUNCTION =====
     async function deleteEvent(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -1892,7 +2167,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (!confirmDelete) return;
 
-        // Log to eventLog before deleting
         const logEntry = {
             id: eventObj.id,
             title: eventObj.title,
@@ -1922,13 +2196,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== RESOLVE EVENT PREDICTIONS - PROPERLY COMPARES CHOICES =====
     async function resolveEventPredictions(eventObj, winnerChoice) {
         try {
             const snap = await get(accountsRef);
             if (!snap.exists()) return;
 
-            const updates = {};
+            const updatesObj = {};
 
             snap.forEach(childSnap => {
                 const uid = childSnap.key;
@@ -1937,62 +2210,47 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 let changed = false;
                 acc.predictions.forEach(pred => {
-                    // Check if this prediction is for the current event AND hasn't been resolved yet
                     if (pred.eventId === eventObj.id && (pred.correct === null || typeof pred.correct === 'undefined')) {
-                        // Ensure we're comparing the same data types
                         const userChoice = String(pred.choice).toUpperCase();
                         const actualWinner = String(winnerChoice).toUpperCase();
                         const correct = userChoice === actualWinner;
-                        
+
                         pred.correct = correct;
                         if (typeof acc.reputation !== 'number') {
                             acc.reputation = 0;
                         }
                         acc.reputation += correct ? 1 : -0.5;
                         changed = true;
-                        
-                        console.log(`User ${acc.username}: Predicted ${userChoice}, Winner ${actualWinner}, Correct: ${correct}`);
                     }
                 });
 
                 if (changed) {
-                    updates[`accounts/${uid}`] = acc;
+                    updatesObj[`accounts/${uid}`] = acc;
                 }
             });
 
-            if (Object.keys(updates).length > 0) {
-                await update(ref(db), updates);
-                console.log('Updated predictions for', Object.keys(updates).length, 'accounts');
+            if (Object.keys(updatesObj).length > 0) {
+                await update(ref(db), updatesObj);
             }
         } catch (err) {
             console.error('Failed to resolve predictions:', err);
         }
     }
 
-    // ===== PREDICTION HANDLING WITH VISUAL FEEDBACK =====
     async function handlePrediction(eventId, choice) {
         if (!currentAccount || !currentUserUid) {
-            await showMessagePopup(
-                'Login Required',
-                'You must be logged in to make predictions.'
-            );
+            await showMessagePopup('Login Required', 'You must be logged in to make predictions.');
             return;
         }
 
         const eventObj = findEventById(eventId);
         if (!eventObj) {
-            await showMessagePopup(
-                'Error',
-                'Event not found.'
-            );
+            await showMessagePopup('Error', 'Event not found.');
             return;
         }
 
         if (eventObj.category === 'ended') {
-            await showMessagePopup(
-                'Event Ended',
-                'This event has already ended. You cannot make new predictions.'
-            );
+            await showMessagePopup('Event Ended', 'This event has already ended. You cannot make new predictions.');
             return;
         }
 
@@ -2001,34 +2259,27 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         let existing = currentAccount.predictions.find(p => p.eventId === eventId);
-        
-        // If user already has a prediction for this event
+
         if (existing) {
-            // If clicking the same choice, do nothing
             if (existing.choice === choice) {
                 return;
             }
-            
-            // If switching prediction, ask for confirmation
+
             const confirmSwitch = await showConfirmPopup(
                 'Switch Prediction',
                 `You already predicted ${existing.choice === 'A' ? eventObj.teamA : eventObj.teamB}. Do you want to switch to ${choice === 'A' ? eventObj.teamA : eventObj.teamB}?`,
                 'Switch',
                 'Keep Current'
             );
-            
-            if (!confirmSwitch) {
-                return; // User chose to keep current prediction
-            }
-            
-            // Update existing prediction
+
+            if (!confirmSwitch) return;
+
             existing.choice = choice;
-            existing.correct = null; // reset if event changed
+            existing.correct = null;
             existing.title = eventObj.title;
             existing.teamA = eventObj.teamA;
             existing.teamB = eventObj.teamB;
         } else {
-            // New prediction
             currentAccount.predictions.push({
                 eventId: eventObj.id,
                 title: eventObj.title,
@@ -2047,25 +2298,20 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        // Update the UI to show which button is selected
         updatePredictionButtons(eventId, choice);
         updateAccountInfo();
     }
 
-    // ===== UPDATE PREDICTION BUTTONS VISUALLY =====
     function updatePredictionButtons(eventId, selectedChoice) {
-        // Find all prediction buttons for this event
         const predictBtns = document.querySelectorAll(`.predict-btn[data-event-id="${eventId}"]`);
-        
+
         predictBtns.forEach(btn => {
-            const choice = btn.getAttribute('data-choice');
-            if (choice === selectedChoice) {
-                // Selected button - green
+            const c = btn.getAttribute('data-choice');
+            if (c === selectedChoice) {
                 btn.style.backgroundColor = 'var(--success)';
                 btn.style.color = 'white';
                 btn.style.borderColor = 'var(--success)';
             } else {
-                // Not selected - default style
                 btn.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
                 btn.style.color = 'var(--text-secondary)';
                 btn.style.borderColor = 'rgba(255, 255, 255, 0.1)';
@@ -2073,18 +2319,16 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== FORCE ACCOUNT REFRESH FUNCTION =====
     async function refreshAccountData() {
         if (!currentUserUid) return;
-        
+
         try {
             const snap = await get(ref(db, `accounts/${currentUserUid}`));
             if (snap.exists()) {
                 currentAccount = snap.val() || {};
                 updateAccountInfo();
-                loadEvents(); // Also refresh events to show updated prediction status
-                
-                // Show success message
+                loadEvents();
+
                 if (profileStatus) {
                     profileStatus.textContent = 'Account data refreshed successfully!';
                     profileStatus.className = 'status success';
@@ -2102,7 +2346,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // Admin event log renderer (table body)
     window.renderEventLog = function () {
         const tbody = document.getElementById('event-log-body');
         if (!tbody) return;
@@ -2131,10 +2374,10 @@ document.addEventListener('DOMContentLoaded', function () {
             const endedAt = entry.endedAt ? new Date(entry.endedAt).toLocaleString() : '';
             html += `
                 <tr>
-                    <td>${entry.title || 'Event'}</td>
-                    <td>${entry.winner || '-'}</td>
-                    <td>${entry.endedBy || 'Unknown'}</td>
-                    <td>${endedAt}</td>
+                    <td>${escapeHtml(entry.title || 'Event')}</td>
+                    <td>${escapeHtml(entry.winner || '-')}</td>
+                    <td>${escapeHtml(entry.endedBy || 'Unknown')}</td>
+                    <td>${escapeHtml(endedAt)}</td>
                 </tr>
             `;
         });
@@ -2142,39 +2385,49 @@ document.addEventListener('DOMContentLoaded', function () {
         tbody.innerHTML = html;
     };
 
-    // ===== NEW: MIGRATION HELPER FOR EXISTING USERS =====
+    // ===== MIGRATION HELPER (includes showChats) =====
     window.migrateExistingUsersToSearch = async function () {
-        const auth = getAuth();
         const user = auth.currentUser;
-        
+
         if (!user) {
             console.log('Please log in as a moderator first');
             return;
         }
-        
+
         try {
             const accountsSnap = await get(accountsRef);
             let migrated = 0;
-            
+
             if (accountsSnap.exists()) {
                 const promises = [];
-                
+
                 accountsSnap.forEach(childSnap => {
                     const uid = childSnap.key;
                     const account = childSnap.val() || {};
-                    
+
                     if (!account.deleted) {
+                        const profile = account.profile || {};
+                        const privacy = normalizePrivacy((profile && profile.privacy) || {});
                         const searchData = {
                             username: account.username,
                             creationDate: account.creationDate,
-                            profile: account.profile || {}
+                            profile: {
+                                picture: profile.picture || "",
+                                bio: profile.bio || "",
+                                privacy: {
+                                    showReputation: privacy.showReputation,
+                                    showBets: privacy.showBets,
+                                    showPredictions: privacy.showPredictions,
+                                    showChats: privacy.showChats
+                                }
+                            }
                         };
-                        
+
                         promises.push(set(ref(db, `userSearch/${uid}`), searchData));
                         migrated++;
                     }
                 });
-                
+
                 await Promise.all(promises);
                 console.log(`Successfully migrated ${migrated} users to search index`);
                 await showMessagePopup('Migration Complete', `Successfully migrated ${migrated} users to search index.`);
@@ -2184,4 +2437,669 @@ document.addEventListener('DOMContentLoaded', function () {
             await showMessagePopup('Migration Failed', 'Failed to migrate users. Check console for details.');
         }
     };
+
+    // =========================
+    // CHAT + BLOCKING SYSTEM
+    // =========================
+
+    function openChatOverlay() {
+        if (!chatOverlay) return;
+        chatOverlay.classList.remove('hidden');
+        // No "active" class required here because css uses .hidden only for chat overlay
+        // But keep consistent
+        setStatus(chatStatusEl, '', '', 0);
+
+        // Auto-select announcements by default
+        selectAnnouncementsChat();
+    }
+
+    function closeChatOverlay() {
+        if (!chatOverlay) return;
+        chatOverlay.classList.add('hidden');
+        // Keep selection but stop messages listener to save bandwidth
+        stopMessagesListener();
+        currentChat = null;
+        updateChatHeader(null);
+        renderChatEmptyState();
+    }
+
+    function renderChatEmptyState() {
+        if (!chatMessagesEl) return;
+        if (chatEmptyStateEl) chatEmptyStateEl.classList.remove('hidden');
+        chatMessagesEl.innerHTML = chatEmptyStateEl ? chatEmptyStateEl.outerHTML : '';
+    }
+
+    function updateChatHeader(chat) {
+        if (!chatSelectedTitleEl || !chatSelectedSubtitleEl) return;
+
+        if (!chat) {
+            chatSelectedTitleEl.textContent = 'Select a chat';
+            chatSelectedSubtitleEl.textContent = '';
+            if (viewChatProfileBtn) viewChatProfileBtn.classList.add('hidden');
+            if (blockChatUserBtn) blockChatUserBtn.classList.add('hidden');
+            setComposeEnabled(false);
+            return;
+        }
+
+        if (chat.type === 'announcements') {
+            chatSelectedTitleEl.textContent = 'Announcements';
+            chatSelectedSubtitleEl.textContent = 'Read-only for members';
+            if (viewChatProfileBtn) viewChatProfileBtn.classList.add('hidden');
+            if (blockChatUserBtn) blockChatUserBtn.classList.add('hidden');
+
+            if (isCurrentUserModerator()) {
+                setComposeEnabled(true);
+                if (chatMessageInputEl) chatMessageInputEl.placeholder = 'Post an announcement...';
+            } else {
+                setComposeEnabled(false);
+                if (chatMessageInputEl) chatMessageInputEl.placeholder = 'Announcements are read-only';
+            }
+            return;
+        }
+
+        if (chat.type === 'dm') {
+            chatSelectedTitleEl.textContent = chat.otherUsername || 'Chat';
+            chatSelectedSubtitleEl.textContent = '';
+            if (viewChatProfileBtn) viewChatProfileBtn.classList.remove('hidden');
+            if (blockChatUserBtn) blockChatUserBtn.classList.remove('hidden');
+
+            // Block restriction: if I blocked them -> cannot chat
+            const iBlocked = myBlockedSet.has(chat.otherUid);
+            if (iBlocked) {
+                setComposeEnabled(false);
+                if (chatMessageInputEl) chatMessageInputEl.placeholder = 'You blocked this user';
+                if (chatSelectedSubtitleEl) chatSelectedSubtitleEl.textContent = 'You blocked this user';
+                if (blockChatUserBtn) blockChatUserBtn.innerHTML = `<i class="fas fa-unlock"></i> Unblock`;
+            } else {
+                setComposeEnabled(true);
+                if (chatMessageInputEl) chatMessageInputEl.placeholder = 'Type a message...';
+                if (blockChatUserBtn) blockChatUserBtn.innerHTML = `<i class="fas fa-ban"></i> Block`;
+            }
+        }
+    }
+
+    function setComposeEnabled(enabled) {
+        const compose = document.querySelector('.chat-compose');
+        if (!compose || !chatMessageInputEl || !sendChatMessageBtn) return;
+
+        if (enabled) {
+            compose.classList.remove('disabled');
+            chatMessageInputEl.disabled = false;
+            sendChatMessageBtn.disabled = false;
+        } else {
+            compose.classList.add('disabled');
+            chatMessageInputEl.disabled = true;
+            sendChatMessageBtn.disabled = true;
+        }
+    }
+
+    function makeDmThreadId(uid1, uid2) {
+        const a = String(uid1 || '');
+        const b = String(uid2 || '');
+        return [a, b].sort().join('_');
+    }
+
+    async function getUserSearchByUid(uid) {
+        if (!uid) return null;
+        if (cachedUserSearch && cachedUserSearch[uid]) return cachedUserSearch[uid];
+
+        try {
+            const snap = await get(ref(db, `userSearch/${uid}`));
+            if (!snap.exists()) return null;
+            const val = snap.val() || {};
+            const obj = { uid, ...val };
+            cachedUserSearch[uid] = obj;
+            return obj;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function startOrOpenDm(otherUid, otherUserDataMaybe) {
+        if (!currentUserUid || !currentAccount) {
+            await showMessagePopup('Login Required', 'You must be logged in to chat.');
+            return;
+        }
+        if (!otherUid) return;
+
+        // If other blocked me -> shouldn't happen due to search filtering, but enforce
+        const theyBlockedMe = (await get(ref(db, `blocks/${otherUid}/${currentUserUid}`))).exists();
+        if (theyBlockedMe) {
+            await showMessagePopup('Cannot Chat', 'You cannot chat with this user.');
+            return;
+        }
+
+        // If I blocked them -> chat disabled
+        const iBlocked = myBlockedSet.has(otherUid);
+        if (iBlocked) {
+            await showMessagePopup('Blocked', 'You blocked this user. Unblock them to start chatting.');
+            return;
+        }
+
+        // Respect privacy: allow chat requests
+        const otherData = otherUserDataMaybe || await getUserSearchByUid(otherUid);
+        if (!otherData) {
+            await showMessagePopup('Not Found', 'User could not be loaded.');
+            return;
+        }
+
+        const privacy = normalizePrivacy((otherData.profile && otherData.profile.privacy) || {});
+        if (!privacy.showChats) {
+            await showMessagePopup('Chat Disabled', 'This user disabled chat requests.');
+            return;
+        }
+
+        const threadId = makeDmThreadId(currentUserUid, otherUid);
+
+        // Ensure thread meta exists
+        try {
+            const metaSnap = await get(ref(db, `chats/dm/${threadId}/meta`));
+            if (!metaSnap.exists()) {
+                await set(ref(db, `chats/dm/${threadId}/meta`), {
+                    a: [currentUserUid, otherUid].sort()[0],
+                    b: [currentUserUid, otherUid].sort()[1],
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                    lastText: ''
+                });
+            }
+
+            // Ensure both userThreads entries exist
+            const meEntry = {
+                otherUid: otherUid,
+                otherUsername: otherData.username || 'User',
+                updatedAt: Date.now(),
+                lastText: ''
+            };
+            const themEntry = {
+                otherUid: currentUserUid,
+                otherUsername: currentAccount.username || 'User',
+                updatedAt: Date.now(),
+                lastText: ''
+            };
+
+            await update(ref(db, `chats/userThreads/${currentUserUid}/${threadId}`), meEntry);
+            await update(ref(db, `chats/userThreads/${otherUid}/${threadId}`), themEntry);
+
+        } catch (err) {
+            console.error('Failed to initialize DM:', err);
+            await showMessagePopup('Error', 'Failed to open chat.');
+            return;
+        }
+
+        openChatOverlay();
+        await selectDmChat(threadId, otherUid);
+    }
+
+    async function selectAnnouncementsChat() {
+        if (!currentUserUid) return;
+        currentChat = { type: 'announcements' };
+        updateChatHeader(currentChat);
+
+        // Highlight in list
+        highlightChatListItem('announcements');
+
+        // Messages listener
+        stopMessagesListener();
+        liveMessagesUnsub = onValue(ref(db, 'chats/announcements/messages'), (snap) => {
+            const messages = [];
+            if (snap.exists()) {
+                snap.forEach(child => {
+                    const msg = child.val() || {};
+                    messages.push({ _key: child.key, ...msg });
+                });
+            }
+            messages.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+            renderAnnouncementsMessages(messages);
+        });
+    }
+
+    async function selectDmChat(threadId, otherUid) {
+        const otherData = await getUserSearchByUid(otherUid);
+        const otherUsername = otherData?.username || 'User';
+
+        currentChat = {
+            type: 'dm',
+            threadId,
+            otherUid,
+            otherUsername,
+            otherProfile: otherData?.profile || {}
+        };
+
+        updateChatHeader(currentChat);
+
+        // Highlight in list
+        highlightChatListItem(threadId);
+
+        // Messages listener
+        stopMessagesListener();
+        liveMessagesUnsub = onValue(ref(db, `chats/dm/${threadId}/messages`), async (snap) => {
+            // If chat was deleted (block), snap may not exist anymore
+            const messages = [];
+            if (snap.exists()) {
+                snap.forEach(child => {
+                    const msg = child.val() || {};
+                    messages.push({ _key: child.key, ...msg });
+                });
+            }
+
+            messages.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
+            // If they blocked me now, delete DM UI (they shouldn't see me; but if happens mid-session)
+            const theyBlockedMe = (await get(ref(db, `blocks/${otherUid}/${currentUserUid}`))).exists();
+            if (theyBlockedMe) {
+                // Close chat and refresh list
+                await showMessagePopup('Chat Closed', 'This chat is no longer available.');
+                currentChat = null;
+                updateChatHeader(null);
+                renderChatEmptyState();
+                return;
+            }
+
+            renderDmMessages(messages, otherData);
+        });
+    }
+
+    function stopMessagesListener() {
+        if (typeof liveMessagesUnsub === 'function') {
+            try { liveMessagesUnsub(); } catch (e) {}
+        }
+        liveMessagesUnsub = null;
+    }
+
+    function stopThreadsListener() {
+        if (typeof liveThreadsUnsub === 'function') {
+            try { liveThreadsUnsub(); } catch (e) {}
+        }
+        liveThreadsUnsub = null;
+    }
+
+    function startThreadsListener() {
+        stopThreadsListener();
+        if (!currentUserUid) return;
+
+        liveThreadsUnsub = onValue(ref(db, `chats/userThreads/${currentUserUid}`), (snap) => {
+            const threads = [];
+            if (snap.exists()) {
+                snap.forEach(child => {
+                    const threadId = child.key;
+                    const data = child.val() || {};
+                    threads.push({ threadId, ...data });
+                });
+            }
+            // Store to global cache for rendering
+            window._chatThreadsCache = threads;
+            renderChatListFromCache();
+        });
+    }
+
+    function startMyBlocksListener() {
+        // Load blocks/<me> into myBlockedSet
+        if (!currentUserUid) return;
+        onValue(ref(db, `blocks/${currentUserUid}`), (snap) => {
+            const s = new Set();
+            if (snap.exists()) {
+                snap.forEach(child => {
+                    if (child.key) s.add(child.key);
+                });
+            }
+            myBlockedSet = s;
+
+            // Update header state if in DM
+            if (currentChat && currentChat.type === 'dm') {
+                updateChatHeader(currentChat);
+            }
+
+            // Refresh search results UI indicators if user is in community tab (optional)
+        });
+    }
+
+    function renderChatListFromCache() {
+        if (!chatListEl) return;
+        const q = (chatSearchEl ? chatSearchEl.value : '').trim().toLowerCase();
+        const threads = Array.isArray(window._chatThreadsCache) ? window._chatThreadsCache : [];
+
+        // Always pinned announcements first
+        let html = `
+            <div class="chat-item pinned" data-chat-id="announcements">
+                <div class="chat-item-avatar"><i class="fas fa-shield-alt"></i></div>
+                <div class="chat-item-body">
+                    <div class="chat-item-title">Announcements</div>
+                    <div class="chat-item-preview">Important updates</div>
+                </div>
+                <div class="chat-item-meta"></div>
+            </div>
+        `;
+
+        // Sort threads by updatedAt desc
+        threads.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+        threads.forEach(t => {
+            const title = t.otherUsername || 'Chat';
+            const preview = t.lastText ? String(t.lastText) : '';
+            const updatedAt = t.updatedAt ? new Date(t.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+            if (q && !title.toLowerCase().includes(q) && !preview.toLowerCase().includes(q)) return;
+
+            const disabled = myBlockedSet.has(t.otherUid);
+
+            html += `
+                <div class="chat-item ${disabled ? 'chat-item-disabled' : ''}" data-chat-id="${t.threadId}" data-other-uid="${t.otherUid}">
+                    <div class="chat-item-avatar">
+                        ${'' /* avatar resolved in messages; keep list simple */ }
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="chat-item-body">
+                        <div class="chat-item-title">${escapeHtml(title)}</div>
+                        <div class="chat-item-preview">${escapeHtml(preview)}</div>
+                    </div>
+                    <div class="chat-item-meta">${escapeHtml(updatedAt)}</div>
+                </div>
+            `;
+        });
+
+        chatListEl.innerHTML = html;
+
+        // Bind click handlers
+        chatListEl.querySelectorAll('.chat-item').forEach(item => {
+            item.addEventListener('click', async () => {
+                const id = item.getAttribute('data-chat-id');
+                if (!id) return;
+
+                if (id === 'announcements') {
+                    await selectAnnouncementsChat();
+                    return;
+                }
+
+                const otherUid = item.getAttribute('data-other-uid');
+                if (!otherUid) return;
+
+                // If blocked: allow opening profile but not chat. Requirement: A can see B but cannot open chat.
+                if (myBlockedSet.has(otherUid)) {
+                    const userData = await getUserSearchByUid(otherUid);
+                    if (userData) {
+                        await openUserProfilePopup(userData);
+                    } else {
+                        await showMessagePopup('Blocked', 'You blocked this user. Unblock them to chat.');
+                    }
+                    return;
+                }
+
+                await selectDmChat(id, otherUid);
+            });
+        });
+
+        // Re-highlight current selection
+        if (currentChat) {
+            highlightChatListItem(currentChat.type === 'announcements' ? 'announcements' : currentChat.threadId);
+        }
+    }
+
+    function highlightChatListItem(chatId) {
+        if (!chatListEl) return;
+        chatListEl.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+        const target = chatListEl.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+        if (target) target.classList.add('active');
+    }
+
+    function renderAnnouncementsMessages(messages) {
+        if (!chatMessagesEl) return;
+
+        if (messages.length === 0) {
+            chatMessagesEl.innerHTML = `
+                <div class="chat-empty-state">
+                    <i class="fas fa-bullhorn"></i>
+                    <h3>No announcements yet</h3>
+                    <p>Important updates will appear here.</p>
+                </div>
+            `;
+            return;
+        }
+
+        let html = '';
+        messages.forEach(m => {
+            const time = m.ts ? new Date(m.ts).toLocaleString() : '';
+            const postedBy = m.postedBy ? ` • posted by ${m.postedBy}` : '';
+
+            html += `
+                <div class="chat-message-row theirs">
+                    <div class="chat-message-avatar">
+                        <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--accent);">
+                            <i class="fas fa-shield-alt"></i>
+                        </div>
+                    </div>
+                    <div class="chat-message-bubble">
+                        <div class="chat-message-header">
+                            <div class="chat-message-name">Announcements${escapeHtml(postedBy)}</div>
+                            <div class="chat-message-time">${escapeHtml(time)}</div>
+                        </div>
+                        <div class="chat-message-text">${escapeHtml(m.text || '')}</div>
+                    </div>
+                </div>
+            `;
+        });
+
+        chatMessagesEl.innerHTML = html;
+        scrollChatToBottom();
+    }
+
+    function renderDmMessages(messages, otherData) {
+        if (!chatMessagesEl) return;
+
+        if (!messages || messages.length === 0) {
+            chatMessagesEl.innerHTML = `
+                <div class="chat-empty-state">
+                    <i class="fas fa-comments"></i>
+                    <h3>No messages yet</h3>
+                    <p>Say hello!</p>
+                </div>
+            `;
+            scrollChatToBottom();
+            return;
+        }
+
+        const otherPic = otherData?.profile?.picture || '';
+        const otherName = otherData?.username || currentChat?.otherUsername || 'User';
+
+        let html = '';
+        messages.forEach(m => {
+            const isMine = (m.fromUid && currentUserUid && m.fromUid === currentUserUid);
+
+            if (isMine) {
+                html += `
+                    <div class="chat-message-row mine">
+                        <div class="chat-message-bubble">
+                            <div class="chat-message-text">${escapeHtml(m.text || '')}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                const time = m.ts ? new Date(m.ts).toLocaleString() : '';
+                html += `
+                    <div class="chat-message-row theirs">
+                        <div class="chat-message-avatar">
+                            ${otherPic ? `<img src="${otherPic}" alt="${escapeHtml(otherName)}" onerror="this.style.display='none';">` : `
+                                <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.75);">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                            `}
+                        </div>
+                        <div class="chat-message-bubble">
+                            <div class="chat-message-header">
+                                <div class="chat-message-name">${escapeHtml(otherName)}</div>
+                                <div class="chat-message-time">${escapeHtml(time)}</div>
+                            </div>
+                            <div class="chat-message-text">${escapeHtml(m.text || '')}</div>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+
+        chatMessagesEl.innerHTML = html;
+        scrollChatToBottom();
+    }
+
+    function scrollChatToBottom() {
+        if (!chatMessagesEl) return;
+        // Slight delay for layout
+        setTimeout(() => {
+            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+        }, 10);
+    }
+
+    async function sendCurrentChatMessage() {
+        if (!currentUserUid || !currentAccount) return;
+        if (!currentChat) return;
+
+        const text = (chatMessageInputEl ? chatMessageInputEl.value : '').trim();
+        if (!text) return;
+
+        // Announcements: mods only
+        if (currentChat.type === 'announcements') {
+            if (!isCurrentUserModerator()) return;
+
+            try {
+                const msg = {
+                    text,
+                    ts: Date.now(),
+                    postedByUid: currentUserUid,
+                    postedBy: currentAccount.username || 'Moderator'
+                };
+                await push(ref(db, 'chats/announcements/messages'), msg);
+                if (chatMessageInputEl) chatMessageInputEl.value = '';
+            } catch (err) {
+                console.error('Send announcement via chat failed:', err);
+                setStatus(chatStatusEl, 'Failed to send.', 'error', 2500);
+            }
+            return;
+        }
+
+        // DMs: blocked restriction
+        if (currentChat.type === 'dm') {
+            const otherUid = currentChat.otherUid;
+            if (!otherUid) return;
+
+            // If I blocked them
+            if (myBlockedSet.has(otherUid)) {
+                setStatus(chatStatusEl, 'You blocked this user.', 'error', 2500);
+                return;
+            }
+
+            // If they blocked me (shouldn't happen, but enforce)
+            const theyBlockedMe = (await get(ref(db, `blocks/${otherUid}/${currentUserUid}`))).exists();
+            if (theyBlockedMe) {
+                setStatus(chatStatusEl, 'Chat is not available.', 'error', 2500);
+                return;
+            }
+
+            try {
+                const msg = {
+                    fromUid: currentUserUid,
+                    text,
+                    ts: Date.now()
+                };
+
+                const threadId = currentChat.threadId;
+                await push(ref(db, `chats/dm/${threadId}/messages`), msg);
+
+                // Update meta + indexes
+                const now = Date.now();
+                const lastText = text.slice(0, 120);
+
+                await update(ref(db, `chats/dm/${threadId}/meta`), {
+                    updatedAt: now,
+                    lastText: lastText
+                });
+
+                await update(ref(db, `chats/userThreads/${currentUserUid}/${threadId}`), {
+                    updatedAt: now,
+                    lastText: lastText
+                });
+
+                await update(ref(db, `chats/userThreads/${otherUid}/${threadId}`), {
+                    updatedAt: now,
+                    lastText: lastText
+                });
+
+                if (chatMessageInputEl) chatMessageInputEl.value = '';
+            } catch (err) {
+                console.error('Send DM failed:', err);
+                setStatus(chatStatusEl, 'Failed to send.', 'error', 2500);
+            }
+        }
+    }
+
+    async function blockUser(targetUid, targetUsername) {
+        if (!currentUserUid || !targetUid) return;
+
+        const ok = await showConfirmPopup(
+            'Block User',
+            `Block "${targetUsername}"? They will not be able to find your profile, and your chat will be deleted.`,
+            'Block',
+            'Cancel'
+        );
+        if (!ok) return;
+
+        try {
+            await set(ref(db, `blocks/${currentUserUid}/${targetUid}`), {
+                ts: Date.now()
+            });
+
+            // Delete DM thread and indexes (applies until unblock)
+            const threadId = makeDmThreadId(currentUserUid, targetUid);
+            await remove(ref(db, `chats/dm/${threadId}`));
+            await remove(ref(db, `chats/userThreads/${currentUserUid}/${threadId}`));
+            await remove(ref(db, `chats/userThreads/${targetUid}/${threadId}`));
+
+            // Update local set quickly
+            myBlockedSet.add(targetUid);
+
+            // If currently viewing this DM, close it
+            if (currentChat && currentChat.type === 'dm' && currentChat.otherUid === targetUid) {
+                currentChat = null;
+                updateChatHeader(null);
+                renderChatEmptyState();
+                stopMessagesListener();
+            }
+
+            setStatus(chatStatusEl, `Blocked ${targetUsername}.`, 'success', 2500);
+            renderChatListFromCache();
+        } catch (err) {
+            console.error('Failed to block user:', err);
+            await showMessagePopup('Error', 'Failed to block user.');
+        }
+    }
+
+    async function unblockUser(targetUid, targetUsername) {
+        if (!currentUserUid || !targetUid) return;
+
+        const ok = await showConfirmPopup(
+            'Unblock User',
+            `Unblock "${targetUsername}"?`,
+            'Unblock',
+            'Cancel'
+        );
+        if (!ok) return;
+
+        try {
+            await remove(ref(db, `blocks/${currentUserUid}/${targetUid}`));
+            myBlockedSet.delete(targetUid);
+
+            // If in dm, re-enable compose
+            if (currentChat && currentChat.type === 'dm' && currentChat.otherUid === targetUid) {
+                updateChatHeader(currentChat);
+            }
+
+            setStatus(chatStatusEl, `Unblocked ${targetUsername}.`, 'success', 2500);
+            renderChatListFromCache();
+        } catch (err) {
+            console.error('Failed to unblock user:', err);
+            await showMessagePopup('Error', 'Failed to unblock user.');
+        }
+    }
+
+    // =========================
+    // End file
+    // =========================
 });
