@@ -41,6 +41,7 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
+// Database references
 const eventsRef = ref(db, "events");
 const eventLogRef = ref(db, "eventLog");
 const accountsRef = ref(db, "accounts");
@@ -48,89 +49,40 @@ const userSearchRef = ref(db, "userSearch");
 const chatsRef = ref(db, "chats");
 const blocksRef = ref(db, "blocks");
 
-// Map of eventId -> firebase key
+// Global state
 window.eventKeyMap = {};
-
-// Save new event to Firebase
-window.saveEventToFirebase = function (eventObj) {
-    const newRef = push(eventsRef);
-    set(newRef, eventObj);
-};
-
-// Subscribe to events in Firebase
-onValue(eventsRef, snapshot => {
-    const events = [];
-    const idToKey = {};
-
-    snapshot.forEach(childSnap => {
-        const ev = childSnap.val() || {};
-        ev._key = childSnap.key;
-        events.push(ev);
-        if (ev.id) {
-            idToKey[ev.id] = childSnap.key;
-        }
-    });
-
-    window.latestEvents = events;
-    window.eventKeyMap = idToKey;
-
-    if (window.displayFirebaseEvents) {
-        window.displayFirebaseEvents(events);
-    }
-});
-
-// Subscribe to event log
-onValue(eventLogRef, snapshot => {
-    const logs = [];
-    snapshot.forEach(childSnap => {
-        const entry = childSnap.val() || {};
-        entry._key = childSnap.key;
-        logs.push(entry);
-    });
-    window.eventLogEntries = logs;
-    if (window.renderEventLog) {
-        window.renderEventLog();
-    }
-});
-
-// Chat state variables
+let currentUserUid = null;
+let currentAccount = null;
 let currentChatId = null;
 let currentChatOtherUser = null;
 let chatListeners = {};
 let chatListListener = null;
 
+// Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function () {
+    // ===== DOM ELEMENTS =====
     const loginPage = document.getElementById('login-page');
     const dashboardPage = document.getElementById('dashboard-page');
     const accountCreationSection = document.getElementById('account-creation');
     const loginSection = document.getElementById('login-section');
-    const statusMessage = document.getElementById('status-message');
-    const loginStatus = document.getElementById('login-status');
     const adminNav = document.getElementById('admin-nav');
     const moderatorBadge = document.getElementById('moderator-badge');
-
+    
+    // Login elements
     const createAccountBtn = document.getElementById('create-account-btn');
     const loginBtn = document.getElementById('login-btn');
     const showRegisterBtn = document.getElementById('show-register-btn');
     const showLoginBtn = document.getElementById('show-login-btn');
     const logoutBtn = document.getElementById('logout-btn');
-    const changeTokenBtn = document.getElementById('change-token-btn');
     const toggleTokenBtn = document.getElementById('toggle-token');
-    const addEventBtn = document.getElementById('add-event-btn');
-    const clearEventLogBtn = document.getElementById('clear-event-log-btn');
-    const tokenStatus = document.getElementById('token-status');
-    const eventLogStatus = document.getElementById('event-log-status');
-
-    // Existing elements
+    
+    // Profile elements
     const updatePictureBtn = document.getElementById('update-picture-btn');
     const saveProfileBtn = document.getElementById('save-profile-btn');
-    const profileStatus = document.getElementById('profile-status');
     const searchUserBtn = document.getElementById('search-user-btn');
     const refreshPredictionsBtn = document.getElementById('refresh-predictions-btn');
-    const closeProfilePopup = document.getElementById('close-profile-popup');
-    const userProfilePopup = document.getElementById('user-profile-popup');
-
-    // CHAT SYSTEM ELEMENTS
+    
+    // Chat elements
     const openChatBtn = document.getElementById('open-chat-btn');
     const chatPopup = document.getElementById('chat-popup');
     const closeChatBtn = document.getElementById('close-chat-btn');
@@ -142,23 +94,33 @@ document.addEventListener('DOMContentLoaded', function () {
     const chatHeaderStatus = document.getElementById('chat-header-status');
     const viewProfileInChatBtn = document.getElementById('view-profile-in-chat');
     const blockUserInChatBtn = document.getElementById('block-user-in-chat');
-    const startChatBtn = document.getElementById('start-chat-btn');
     const chatSearchInput = document.getElementById('chat-search-input');
-    const newChatBtn = document.getElementById('new-chat-btn');
+    
+    // Admin elements
+    const changeTokenBtn = document.getElementById('change-token-btn');
+    const addEventBtn = document.getElementById('add-event-btn');
+    const clearEventLogBtn = document.getElementById('clear-event-log-btn');
     const adminBroadcastBtn = document.getElementById('admin-broadcast-btn');
-    const broadcastMessageInput = document.getElementById('broadcast-message-input');
     const sendBroadcastBtn = document.getElementById('send-broadcast-btn');
-
-    // ===== CUSTOM POPUP SYSTEM =====
+    const broadcastMessageInput = document.getElementById('broadcast-message-input');
+    
+    // Popup elements
     const popupOverlay = document.getElementById('popup-overlay');
     const popupTitle = document.getElementById('popup-title');
     const popupMessage = document.getElementById('popup-message');
     const popupInput = document.getElementById('popup-input');
     const popupButtons = document.getElementById('popup-buttons');
+    const userProfilePopup = document.getElementById('user-profile-popup');
+    const closeProfilePopup = document.getElementById('close-profile-popup');
+    
+    // Status elements
+    const statusMessage = document.getElementById('status-message');
+    const loginStatus = document.getElementById('login-status');
+    const tokenStatus = document.getElementById('token-status');
+    const eventLogStatus = document.getElementById('event-log-status');
+    const profileStatus = document.getElementById('profile-status');
 
-    let currentUserUid = null;
-    let currentAccount = null;
-
+    // ===== POPUP SYSTEM =====
     function closePopup() {
         if (!popupOverlay) return;
         popupOverlay.classList.remove('active');
@@ -169,18 +131,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function showPopup(options) {
         return new Promise(resolve => {
-            if (!popupOverlay || !popupTitle || !popupMessage || !popupButtons) {
-                resolve(null);
-                return;
-            }
-
-            const {
-                title = 'Message',
-                message = '',
-                showInput = false,
-                inputDefault = '',
-                buttons = []
-            } = options || {};
+            const { title = 'Message', message = '', showInput = false, inputDefault = '', buttons = [] } = options || {};
 
             popupTitle.textContent = title;
             popupMessage.textContent = message;
@@ -200,15 +151,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 const b = document.createElement('button');
                 b.textContent = btn.text || 'OK';
                 b.classList.add('popup-btn');
-                if (btn.type) {
-                    b.classList.add(btn.type);
-                }
+                if (btn.type) b.classList.add(btn.type);
 
                 b.addEventListener('click', () => {
-                    const result = {
-                        button: btn.value,
-                        input: popupInput.value
-                    };
+                    const result = { button: btn.value, input: popupInput.value };
                     closePopup();
                     resolve(result);
                 });
@@ -227,10 +173,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return showPopup({
             title,
             message,
-            showInput: false,
-            buttons: [
-                { text: buttonText, value: true, type: 'confirm' }
-            ]
+            buttons: [{ text: buttonText, value: true, type: 'confirm' }]
         });
     }
 
@@ -238,7 +181,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const result = await showPopup({
             title,
             message,
-            showInput: false,
             buttons: [
                 { text: cancelText, value: false, type: 'cancel' },
                 { text: confirmText, value: true, type: 'confirm' }
@@ -263,39 +205,20 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function showChoicePopup(title, message, choices, cancelText = 'Cancel') {
-        const buttons = [];
-        choices.forEach(ch => {
-            buttons.push({
-                text: ch.label,
-                value: ch.value,
-                type: 'confirm'
-            });
-        });
-        buttons.push({
-            text: cancelText,
-            value: null,
-            type: 'cancel'
-        });
+        const buttons = choices.map(ch => ({
+            text: ch.label,
+            value: ch.value,
+            type: 'confirm'
+        }));
+        buttons.push({ text: cancelText, value: null, type: 'cancel' });
 
-        const result = await showPopup({
-            title,
-            message,
-            showInput: false,
-            buttons
-        });
-
+        const result = await showPopup({ title, message, buttons });
         if (!result) return null;
         return result.button;
     }
 
-    // ===== FORM POPUP FOR SINGLE-FORM EDITING =====
     async function showFormPopup(title, fields, confirmText = 'Save', cancelText = 'Cancel') {
         return new Promise(resolve => {
-            if (!popupOverlay || !popupTitle || !popupMessage || !popupButtons) {
-                resolve(null);
-                return;
-            }
-
             let formHTML = '';
             fields.forEach(field => {
                 formHTML += `
@@ -356,9 +279,8 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== USER PROFILE POPUP SYSTEM =====
+    // ===== USER PROFILE POPUP =====
     function closeUserProfilePopup() {
-        if (!userProfilePopup) return;
         userProfilePopup.classList.remove('active');
         setTimeout(() => {
             userProfilePopup.classList.add('hidden');
@@ -366,27 +288,21 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function openUserProfilePopup(userData) {
-        if (!userProfilePopup) return;
-        
         const profile = userData.profile || {};
         const privacy = profile.privacy || {};
-        
-        // Respect privacy settings
         const showReputation = privacy.showReputation !== false;
         const showBets = privacy.showBets !== false;
         const showPredictions = privacy.showPredictions !== false;
 
-        // Set username in popup header
         document.getElementById('profile-popup-username').textContent = userData.username || 'User Profile';
         
-        // Build profile content
         const profileContent = document.getElementById('profile-popup-content');
         profileContent.innerHTML = `
             <div class="profile-popup-avatar">
                 ${profile.picture ? `
                     <img src="${profile.picture}" 
                          alt="${userData.username}" 
-                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">
                     <div class="profile-popup-avatar-placeholder" style="display: none;">
                         <i class="fas fa-user"></i>
                         <div style="font-size: 0.7rem; margin-top: 5px;">No PFP</div>
@@ -462,7 +378,6 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
         `;
 
-        // Add event listeners for the new buttons
         setTimeout(() => {
             const chatBtn = document.getElementById('profile-chat-btn');
             const blockBtn = document.getElementById('profile-block-btn');
@@ -477,10 +392,15 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             
             if (blockBtn) {
-                blockBtn.addEventListener('click', function() {
+                blockBtn.addEventListener('click', async function() {
                     const userId = this.getAttribute('data-user-id');
                     const username = this.getAttribute('data-username');
-                    blockUser(userId, username);
+                    // Close profile popup BEFORE showing block confirmation
+                    closeUserProfilePopup();
+                    // Small delay to ensure popup closes
+                    setTimeout(() => {
+                        blockUser(userId, username);
+                    }, 100);
                 });
             }
         }, 100);
@@ -491,10 +411,8 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== CHAT POPUP SYSTEM =====
+    // ===== CHAT SYSTEM =====
     function openChatPopup() {
-        if (!chatPopup) return;
-        
         chatPopup.classList.remove('hidden');
         requestAnimationFrame(() => {
             chatPopup.classList.add('active');
@@ -503,12 +421,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function closeChatPopup() {
-        if (!chatPopup) return;
-        
         chatPopup.classList.remove('active');
         setTimeout(() => {
             chatPopup.classList.add('hidden');
-            // Clear current chat
             currentChatId = null;
             currentChatOtherUser = null;
             chatMessagesContainer.innerHTML = '';
@@ -520,13 +435,11 @@ document.addEventListener('DOMContentLoaded', function () {
             viewProfileInChatBtn.style.display = 'none';
             blockUserInChatBtn.style.display = 'none';
             
-            // Remove chat listeners
             Object.values(chatListeners).forEach(unsubscribe => {
                 if (unsubscribe) unsubscribe();
             });
             chatListeners = {};
             
-            // Remove chat list listener
             if (chatListListener) {
                 chatListListener();
                 chatListListener = null;
@@ -534,25 +447,26 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 200);
     }
 
-    // ===== CHAT FUNCTIONS =====
+    function generateChatId(userId1, userId2) {
+        const sortedIds = [userId1, userId2].sort();
+        return `chat_${sortedIds[0]}_${sortedIds[1]}`;
+    }
+
     async function startOrOpenChat(otherUserId, otherUsername) {
         if (!currentUserUid || !otherUserId || otherUserId === currentUserUid) return;
         
-        // Check if user is blocked
         const isBlocked = await checkIfBlocked(otherUserId);
         if (isBlocked) {
             await showMessagePopup('Cannot Start Chat', 'You have blocked this user. Unblock them first to start a chat.');
             return;
         }
         
-        // Check if other user has blocked us
         const amIBlocked = await checkIfUserBlockedMe(otherUserId);
         if (amIBlocked) {
             await showMessagePopup('Cannot Start Chat', 'This user has blocked you. You cannot start a chat with them.');
             return;
         }
         
-        // Check privacy settings
         const otherUserAccount = await getUserAccount(otherUserId);
         if (otherUserAccount && otherUserAccount.profile && otherUserAccount.profile.privacy) {
             if (otherUserAccount.profile.privacy.allowChats === false) {
@@ -561,20 +475,9 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
         
-        // Generate chat ID (sorted to ensure consistency)
         const chatId = generateChatId(currentUserUid, otherUserId);
-        
-        // Open chat popup
         openChatPopup();
-        
-        // Load or create chat
         await loadChat(chatId, otherUserId, otherUsername);
-    }
-
-    function generateChatId(userId1, userId2) {
-        // Sort user IDs to ensure same chat ID regardless of who starts it
-        const sortedIds = [userId1, userId2].sort();
-        return `chat_${sortedIds[0]}_${sortedIds[1]}`;
     }
 
     async function loadChat(chatId, otherUserId, otherUsername) {
@@ -586,26 +489,21 @@ document.addEventListener('DOMContentLoaded', function () {
             username: otherUsername
         };
         
-        // Update chat header
         chatHeaderUsername.textContent = otherUsername || 'User';
         chatHeaderStatus.textContent = 'Online';
         viewProfileInChatBtn.style.display = 'inline-block';
         blockUserInChatBtn.style.display = 'inline-block';
         
-        // Enable message input
         chatMessageInput.disabled = false;
         sendChatMessageBtn.disabled = false;
         chatMessageInput.focus();
         
-        // Clear existing messages
         chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading messages...</div>';
         
-        // Check if chat exists
         const chatRef = ref(db, `chats/userChats/${chatId}`);
         const chatSnap = await get(chatRef);
         
         if (!chatSnap.exists()) {
-            // Create new chat
             await set(chatRef, {
                 participants: {
                     user1: currentUserUid,
@@ -618,11 +516,9 @@ document.addEventListener('DOMContentLoaded', function () {
             
             chatMessagesContainer.innerHTML = '<div class="chat-empty">No messages yet. Start the conversation!</div>';
         } else {
-            // Load existing messages
             await loadChatMessages(chatId);
         }
         
-        // Set up real-time listener for new messages
         setupChatListener(chatId);
     }
 
@@ -644,44 +540,36 @@ document.addEventListener('DOMContentLoaded', function () {
             messages.push(message);
         });
         
-        // Sort messages by timestamp
         messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         
-        // Display messages
         messages.forEach(message => {
             addMessageToChat(message, false);
         });
         
-        // Scroll to bottom
         setTimeout(() => {
             chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
         }, 100);
     }
 
     function setupChatListener(chatId) {
-        // Remove existing listener for this chat
         if (chatListeners[chatId]) {
             chatListeners[chatId]();
         }
         
         const messagesRef = ref(db, `chats/userChats/${chatId}/messages`);
         
-        // Listen for new messages
         chatListeners[chatId] = onChildAdded(messagesRef, (snapshot) => {
             if (snapshot.exists()) {
                 const message = snapshot.val();
                 message._id = snapshot.key;
                 
-                // Check if message already displayed
                 if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
                     addMessageToChat(message, false);
                     
-                    // Scroll to bottom
                     setTimeout(() => {
                         chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
                     }, 100);
                     
-                    // Update chat list with last message
                     updateChatListItem(chatId, message);
                 }
             }
@@ -697,7 +585,6 @@ document.addEventListener('DOMContentLoaded', function () {
         let messageHTML = '';
         
         if (isBot) {
-            // Bot message styling
             messageHTML = `
                 <div class="chat-message bot-message" data-message-id="${message._id}">
                     <div class="message-avatar">
@@ -713,7 +600,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
             `;
         } else if (isCurrentUser) {
-            // Current user's message (right side)
             messageHTML = `
                 <div class="chat-message user-message" data-message-id="${message._id}">
                     <div class="message-content">
@@ -723,7 +609,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
             `;
         } else {
-            // Other user's message (left side)
             messageHTML = `
                 <div class="chat-message other-message" data-message-id="${message._id}">
                     <div class="message-avatar">
@@ -743,7 +628,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (isNew) {
             chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
         } else {
-            // Check if message already exists
             if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
                 chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
             }
@@ -756,7 +640,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const messageText = chatMessageInput.value.trim();
         if (!messageText) return;
         
-        // Check if blocked
         const isBlocked = await checkIfBlocked(currentChatOtherUser.uid);
         if (isBlocked) {
             await showMessagePopup('Cannot Send Message', 'You have blocked this user. Unblock them first to send messages.');
@@ -769,7 +652,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         
-        // Create message object
         const message = {
             text: messageText,
             senderId: currentUserUid,
@@ -777,14 +659,12 @@ document.addEventListener('DOMContentLoaded', function () {
             read: false
         };
         
-        // Add to Firebase
         const messagesRef = ref(db, `chats/userChats/${currentChatId}/messages`);
         const newMessageRef = push(messagesRef);
         
         try {
             await set(newMessageRef, message);
             
-            // Update chat last message
             const chatRef = ref(db, `chats/userChats/${currentChatId}`);
             await update(chatRef, {
                 lastMessage: messageText,
@@ -792,7 +672,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 lastMessageSender: currentUserUid
             });
             
-            // Clear input
             chatMessageInput.value = '';
             chatMessageInput.focus();
             
@@ -805,23 +684,23 @@ document.addEventListener('DOMContentLoaded', function () {
     async function loadChatList() {
         if (!currentUserUid) return;
         
-        chatListContainer.innerHTML = '<div class="chat-list-loading">Loading conversations...</div>';
+        // Start with empty state
+        chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations</div>';
         
-        // Get all chats where current user is a participant
+        // Load announcements first
+        await loadAnnouncements();
+        
+        // Load user chats
         const userChatsRef = ref(db, 'chats/userChats');
         const chatsSnap = await get(userChatsRef);
         
-        if (!chatsSnap.exists()) {
-            chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations yet</div>';
-            return;
-        }
+        if (!chatsSnap.exists()) return;
         
         const chats = [];
         chatsSnap.forEach(childSnap => {
             const chat = childSnap.val();
             const chatId = childSnap.key;
             
-            // Check if current user is a participant
             if (chat.participants && 
                 (chat.participants.user1 === currentUserUid || chat.participants.user2 === currentUserUid)) {
                 
@@ -838,12 +717,9 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
         
-        // Sort by last message time (newest first)
         chats.sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
         
-        // Get user info for each chat
         const chatItems = await Promise.all(chats.map(async (chat) => {
-            // Skip if blocked
             const isBlocked = await checkIfBlocked(chat.otherUserId);
             if (isBlocked) return null;
             
@@ -857,15 +733,14 @@ document.addEventListener('DOMContentLoaded', function () {
             };
         }));
         
-        // Filter out null (blocked users)
         const filteredChats = chatItems.filter(chat => chat !== null);
         
-        if (filteredChats.length === 0) {
-            chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations yet</div>';
-            return;
-        }
+        if (filteredChats.length === 0) return;
         
-        // Display chat list
+        // Remove empty state
+        const emptyState = chatListContainer.querySelector('.chat-list-empty');
+        if (emptyState) emptyState.remove();
+        
         let html = '';
         filteredChats.forEach(chat => {
             const lastMessageTime = chat.lastMessageTime ? 
@@ -874,7 +749,6 @@ document.addEventListener('DOMContentLoaded', function () {
             const lastMessagePreview = chat.lastMessage ? 
                 (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet';
             
-            // Truncate long messages
             const truncatedMessage = lastMessagePreview.length > 30 ? 
                 lastMessagePreview.substring(0, 30) + '...' : lastMessagePreview;
             
@@ -892,34 +766,27 @@ document.addEventListener('DOMContentLoaded', function () {
             `;
         });
         
-        chatListContainer.innerHTML = html;
+        chatListContainer.insertAdjacentHTML('beforeend', html);
         
-        // Add click listeners
         document.querySelectorAll('.chat-list-item').forEach(item => {
             item.addEventListener('click', function() {
                 const chatId = this.getAttribute('data-chat-id');
                 const userId = this.getAttribute('data-user-id');
                 const username = this.getAttribute('data-username');
                 
-                // Remove active class from all items
                 document.querySelectorAll('.chat-list-item').forEach(i => {
                     i.classList.remove('active');
                 });
                 
-                // Add active class to clicked item
                 this.classList.add('active');
-                
-                // Load the chat
                 loadChat(chatId, userId, username);
             });
         });
         
-        // Set up real-time listener for chat list updates
         setupChatListListener();
     }
 
     function setupChatListListener() {
-        // Remove existing listener
         if (chatListListener) {
             chatListListener();
         }
@@ -931,25 +798,20 @@ document.addEventListener('DOMContentLoaded', function () {
             const chat = snapshot.val();
             const chatId = snapshot.key;
             
-            // Check if current user is a participant
             if (chat.participants && 
                 (chat.participants.user1 === currentUserUid || chat.participants.user2 === currentUserUid)) {
                 
                 const otherUserId = chat.participants.user1 === currentUserUid ? 
                     chat.participants.user2 : chat.participants.user1;
                 
-                // Check if already in list
                 if (document.querySelector(`[data-chat-id="${chatId}"]`)) return;
                 
-                // Check if blocked
                 const isBlocked = await checkIfBlocked(otherUserId);
                 if (isBlocked) return;
                 
-                // Get user info
                 const userAccount = await getUserAccount(otherUserId);
                 if (!userAccount) return;
                 
-                // Add to chat list
                 addChatToList(chatId, otherUserId, userAccount.username, chat);
             }
         });
@@ -978,22 +840,11 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
         `;
         
-        // Remove empty state if present
         const emptyState = chatListContainer.querySelector('.chat-list-empty');
-        if (emptyState) {
-            emptyState.remove();
-        }
+        if (emptyState) emptyState.remove();
         
-        // Remove loading state if present
-        const loadingState = chatListContainer.querySelector('.chat-list-loading');
-        if (loadingState) {
-            loadingState.remove();
-        }
+        chatListContainer.insertAdjacentHTML('beforeend', chatItemHTML);
         
-        // Add to top of list
-        chatListContainer.insertAdjacentHTML('afterbegin', chatItemHTML);
-        
-        // Add click listener to new item
         const newItem = chatListContainer.querySelector(`[data-chat-id="${chatId}"]`);
         newItem.addEventListener('click', function() {
             const chatId = this.getAttribute('data-chat-id');
@@ -1026,7 +877,6 @@ document.addEventListener('DOMContentLoaded', function () {
             previewElement.textContent = truncated;
         }
         
-        // Move to top
         chatListContainer.prepend(chatItem);
     }
 
@@ -1045,16 +895,171 @@ document.addEventListener('DOMContentLoaded', function () {
         return date.toLocaleDateString();
     }
 
+    // ===== ANNOUNCEMENTS SYSTEM =====
+    async function loadAnnouncements() {
+        if (!currentUserUid) return;
+        
+        const announcementsRef = ref(db, 'chats/announcements/messages');
+        const snap = await get(announcementsRef);
+        
+        if (!snap.exists()) return;
+        
+        const hasAnnouncements = document.querySelector('.announcements-item');
+        if (hasAnnouncements) return;
+        
+        // Get latest announcement for preview
+        let latestTime = '';
+        let latestMessage = 'System announcements';
+        
+        snap.forEach(childSnap => {
+            const message = childSnap.val();
+            const messageTime = new Date(message.timestamp);
+            if (!latestTime || messageTime > new Date(latestTime)) {
+                latestTime = message.timestamp;
+                latestMessage = message.text.length > 30 ? message.text.substring(0, 30) + '...' : message.text;
+            }
+        });
+        
+        const announcementItemHTML = `
+            <div class="chat-list-item announcements-item" data-chat-id="announcements" data-user-id="BOT" data-username="Announcements">
+                <div class="chat-item-avatar" style="background: linear-gradient(135deg, var(--warning), #ff9800);">
+                    <i class="fas fa-bullhorn"></i>
+                </div>
+                <div class="chat-item-info">
+                    <div class="chat-item-username" style="display: flex; align-items: center; gap: 8px;">
+                        Announcements
+                        <span style="font-size: 0.7rem; background: var(--secondary); color: var(--text-secondary); padding: 2px 6px; border-radius: 10px;">pinned</span>
+                    </div>
+                    <div class="chat-item-preview">${latestMessage}</div>
+                </div>
+            </div>
+        `;
+        
+        const emptyState = chatListContainer.querySelector('.chat-list-empty');
+        if (emptyState) emptyState.remove();
+        
+        chatListContainer.insertAdjacentHTML('afterbegin', announcementItemHTML);
+        
+        const announcementItem = chatListContainer.querySelector('.announcements-item');
+        announcementItem.addEventListener('click', function() {
+            loadAnnouncementsChat();
+        });
+    }
+
+    async function loadAnnouncementsChat() {
+        currentChatId = 'announcements';
+        currentChatOtherUser = {
+            uid: 'BOT',
+            username: 'Announcements'
+        };
+        
+        chatHeaderUsername.textContent = 'Announcements';
+        chatHeaderStatus.textContent = 'Pinned • System Broadcasts';
+        viewProfileInChatBtn.style.display = 'none';
+        blockUserInChatBtn.style.display = 'none';
+        
+        chatMessageInput.disabled = true;
+        sendChatMessageBtn.disabled = true;
+        chatMessageInput.placeholder = 'You cannot reply to announcements';
+        
+        chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading announcements...</div>';
+        
+        const announcementsRef = ref(db, 'chats/announcements/messages');
+        const snap = await get(announcementsRef);
+        
+        chatMessagesContainer.innerHTML = '';
+        
+        if (!snap.exists()) {
+            chatMessagesContainer.innerHTML = '<div class="chat-empty">No announcements yet.</div>';
+            return;
+        }
+        
+        const announcements = [];
+        snap.forEach(childSnap => {
+            const message = childSnap.val();
+            message._id = childSnap.key;
+            announcements.push(message);
+        });
+        
+        announcements.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        
+        announcements.forEach(message => {
+            const timestamp = new Date(message.timestamp);
+            const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = timestamp.toLocaleDateString();
+            
+            const messageHTML = `
+                <div class="chat-message bot-message" data-message-id="${message._id}">
+                    <div class="message-avatar" style="background: linear-gradient(135deg, var(--warning), #ff9800);">
+                        <i class="fas fa-bullhorn"></i>
+                    </div>
+                    <div class="message-content">
+                        <div class="message-header">
+                            <span class="message-sender">System Broadcast</span>
+                            <span class="message-time">${dateString} ${timeString}</span>
+                        </div>
+                        <div class="message-text">${message.text}</div>
+                        ${message.sentBy ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">Sent by: ${message.sentBy}</div>` : ''}
+                    </div>
+                </div>
+            `;
+            
+            chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
+        });
+        
+        setTimeout(() => {
+            chatMessagesContainer.scrollTop = 0;
+        }, 100);
+        
+        setupAnnouncementsListener();
+    }
+
+    function setupAnnouncementsListener() {
+        if (chatListeners['announcements']) {
+            chatListeners['announcements']();
+        }
+        
+        const announcementsRef = ref(db, 'chats/announcements/messages');
+        
+        chatListeners['announcements'] = onChildAdded(announcementsRef, (snapshot) => {
+            if (snapshot.exists() && currentChatId === 'announcements') {
+                const message = snapshot.val();
+                message._id = snapshot.key;
+                
+                if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
+                    const timestamp = new Date(message.timestamp);
+                    const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const dateString = timestamp.toLocaleDateString();
+                    
+                    const messageHTML = `
+                        <div class="chat-message bot-message" data-message-id="${message._id}">
+                            <div class="message-avatar" style="background: linear-gradient(135deg, var(--warning), #ff9800);">
+                                <i class="fas fa-bullhorn"></i>
+                            </div>
+                            <div class="message-content">
+                                <div class="message-header">
+                                    <span class="message-sender">System Broadcast</span>
+                                    <span class="message-time">${dateString} ${timeString}</span>
+                                </div>
+                                <div class="message-text">${message.text}</div>
+                                ${message.sentBy ? `<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">Sent by: ${message.sentBy}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                    
+                    chatMessagesContainer.insertAdjacentHTML('afterbegin', messageHTML);
+                }
+            }
+        });
+    }
+
     // ===== BLOCKING SYSTEM =====
     async function blockUser(userId, username) {
         if (!currentUserUid || !userId || userId === currentUserUid) return;
         
         const confirmBlock = await showConfirmPopup(
             'Block User',
-            `Are you sure you want to block ${username}? This will:
-            - Remove your chat with them
-            - Hide you from their searches
-            - Prevent them from starting new chats with you`,
+            `Are you sure you want to block ${username}?`,
             'Block',
             'Cancel'
         );
@@ -1062,16 +1067,16 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!confirmBlock) return;
         
         try {
-            // Add to blocked list
             const blockRef = ref(db, `blocks/${currentUserUid}/blockedUsers/${userId}`);
-            await set(blockRef, true);
+            await set(blockRef, {
+                blockedAt: new Date().toISOString(),
+                username: username
+            });
             
-            // Delete chat if exists
             const chatId = generateChatId(currentUserUid, userId);
             const chatRef = ref(db, `chats/userChats/${chatId}`);
             await remove(chatRef);
             
-            // If currently viewing this chat, close it
             if (currentChatOtherUser && currentChatOtherUser.uid === userId) {
                 chatMessagesContainer.innerHTML = '<div class="chat-empty">User blocked. Chat removed.</div>';
                 chatHeaderUsername.textContent = 'Select a conversation';
@@ -1084,13 +1089,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 currentChatOtherUser = null;
             }
             
-            // Remove from chat list
             const chatItem = document.querySelector(`[data-user-id="${userId}"]`);
             if (chatItem) {
                 chatItem.remove();
             }
             
-            // Show success
             await showMessagePopup('User Blocked', `${username} has been blocked.`);
             
         } catch (error) {
@@ -1104,9 +1107,7 @@ document.addEventListener('DOMContentLoaded', function () {
         
         const confirmUnblock = await showConfirmPopup(
             'Unblock User',
-            `Are you sure you want to unblock ${username}? This will allow them to:
-            - See you in searches
-            - Start chats with you (if you allow chats)`,
+            `Unblock ${username}?`,
             'Unblock',
             'Cancel'
         );
@@ -1151,6 +1152,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    // ===== HELPER FUNCTIONS =====
     async function getUserAccount(userId) {
         try {
             const accountRef = ref(db, `accounts/${userId}`);
@@ -1167,309 +1169,43 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== ADMIN BROADCAST SYSTEM =====
-    async function sendBroadcastMessage() {
-        if (!isCurrentUserModerator()) return;
-        
-        const message = broadcastMessageInput.value.trim();
-        if (!message) {
-            await showMessagePopup('Error', 'Please enter a message to broadcast.');
-            return;
+    function generateToken() {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        let token = '';
+        for (let i = 0; i < 16; i++) {
+            token += chars.charAt(Math.floor(Math.random() * chars.length));
         }
-        
-        const confirmSend = await showConfirmPopup(
-            'Send Broadcast',
-            `Are you sure you want to send this message to ALL users?
-            
-            "${message}"
-            
-            This cannot be undone.`,
-            'Send to All',
-            'Cancel'
-        );
-        
-        if (!confirmSend) return;
-        
-        try {
-            const broadcastMessage = {
-                text: message,
-                senderId: 'BOT',
-                timestamp: new Date().toISOString(),
-                isBroadcast: true
-            };
-            
-            const announcementsRef = ref(db, 'chats/announcements/messages');
-            await push(announcementsRef, broadcastMessage);
-            
-            broadcastMessageInput.value = '';
-            await showMessagePopup('Broadcast Sent', 'Message sent to all users successfully!');
-            
-        } catch (error) {
-            console.error('Failed to send broadcast:', error);
-            await showMessagePopup('Error', 'Failed to send broadcast. Please try again.');
-        }
+        return token;
     }
 
-    async function loadAnnouncements() {
-        if (!currentUserUid) return;
-        
-        const announcementsRef = ref(db, 'chats/announcements/messages');
-        const snap = await get(announcementsRef);
-        
-        if (!snap.exists()) return;
-        
-        // Check if we have an announcements chat in our list
-        let hasAnnouncements = false;
-        const chatItems = document.querySelectorAll('.chat-list-item');
-        chatItems.forEach(item => {
-            if (item.getAttribute('data-user-id') === 'BOT') {
-                hasAnnouncements = true;
-            }
-        });
-        
-        if (!hasAnnouncements) {
-            // Add announcements to chat list
-            const announcementItemHTML = `
-                <div class="chat-list-item announcements-item" data-chat-id="announcements" data-user-id="BOT" data-username="ogwXbet Notification System">
-                    <div class="chat-item-avatar">
-                        <i class="fas fa-shield-alt"></i>
-                    </div>
-                    <div class="chat-item-info">
-                        <div class="chat-item-username">ogwXbet Notification System</div>
-                        <div class="chat-item-preview">System announcements and updates</div>
-                    </div>
-                </div>
-            `;
-            
-            // Remove empty state if present
-            const emptyState = chatListContainer.querySelector('.chat-list-empty');
-            if (emptyState) {
-                emptyState.remove();
-            }
-            
-            // Remove loading state if present
-            const loadingState = chatListContainer.querySelector('.chat-list-loading');
-            if (loadingState) {
-                loadingState.remove();
-            }
-            
-            chatListContainer.insertAdjacentHTML('afterbegin', announcementItemHTML);
-            
-            // Add click listener
-            const announcementItem = chatListContainer.querySelector('.announcements-item');
-            announcementItem.addEventListener('click', function() {
-                loadAnnouncementsChat();
-            });
-        }
+    function isCurrentUserModerator() {
+        return !!(currentAccount && currentAccount.isModerator);
     }
 
-    async function loadAnnouncementsChat() {
-        currentChatId = 'announcements';
-        currentChatOtherUser = {
-            uid: 'BOT',
-            username: 'ogwXbet Notification System'
-        };
-        
-        chatHeaderUsername.textContent = 'ogwXbet Notification System';
-        chatHeaderStatus.textContent = 'System Bot';
-        viewProfileInChatBtn.style.display = 'none';
-        blockUserInChatBtn.style.display = 'none';
-        
-        // Disable message input for bot
-        chatMessageInput.disabled = true;
-        sendChatMessageBtn.disabled = true;
-        chatMessageInput.placeholder = 'You cannot reply to system messages';
-        
-        // Clear messages
-        chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading announcements...</div>';
-        
-        // Load announcements
-        const announcementsRef = ref(db, 'chats/announcements/messages');
-        const snap = await get(announcementsRef);
-        
-        chatMessagesContainer.innerHTML = '';
-        
-        if (!snap.exists()) {
-            chatMessagesContainer.innerHTML = '<div class="chat-empty">No announcements yet.</div>';
-            return;
-        }
-        
-        const announcements = [];
-        snap.forEach(childSnap => {
-            const message = childSnap.val();
-            message._id = childSnap.key;
-            announcements.push(message);
-        });
-        
-        // Sort by timestamp (newest first for announcements)
-        announcements.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        
-        // Display announcements
-        announcements.forEach(message => {
-            addMessageToChat(message, false);
-        });
-        
-        // Set up listener for new announcements
-        setupAnnouncementsListener();
+    function showStatus(element, message, type) {
+        if (!element) return;
+        element.textContent = message;
+        element.className = `status ${type}`;
+        setTimeout(() => {
+            element.className = 'status';
+        }, 3000);
     }
 
-    function setupAnnouncementsListener() {
-        // Remove existing announcement listener
-        if (chatListeners['announcements']) {
-            chatListeners['announcements']();
-        }
-        
-        const announcementsRef = ref(db, 'chats/announcements/messages');
-        
-        chatListeners['announcements'] = onChildAdded(announcementsRef, (snapshot) => {
-            if (snapshot.exists() && currentChatId === 'announcements') {
-                const message = snapshot.val();
-                message._id = snapshot.key;
-                
-                if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
-                    addMessageToChat(message, false);
-                }
-            }
-        });
-    }
-
-    // ===============================
-    // EXISTING FUNCTIONS (UPDATED FOR CHAT INTEGRATION)
-
-    checkLoginStatus();
-
-    showRegisterBtn.addEventListener('click', function () {
-        loginSection.classList.add('hidden');
-        accountCreationSection.classList.remove('hidden');
-    });
-
-    showLoginBtn.addEventListener('click', function () {
-        accountCreationSection.classList.add('hidden');
-        loginSection.classList.remove('hidden');
-    });
-
-    toggleTokenBtn.addEventListener('click', function () {
-        const tokenInput = document.getElementById('login-token');
-        const icon = this.querySelector('i');
-        if (tokenInput.type === 'password') {
-            tokenInput.type = 'text';
-            icon.classList.remove('fa-eye');
-            icon.classList.add('fa-eye-slash');
-        } else {
-            tokenInput.type = 'password';
-            icon.classList.remove('fa-eye-slash');
-            icon.classList.add('fa-eye');
-        }
-    });
-
-    // ===== EVENT LISTENERS =====
-    if (updatePictureBtn) {
-        updatePictureBtn.addEventListener('click', updateProfilePicture);
-    }
-
-    if (saveProfileBtn) {
-        saveProfileBtn.addEventListener('click', saveProfileSettings);
-    }
-
-    if (searchUserBtn) {
-        searchUserBtn.addEventListener('click', searchUsers);
-    }
-
-    if (refreshPredictionsBtn) {
-        refreshPredictionsBtn.addEventListener('click', refreshAccountData);
-    }
-
-    if (closeProfilePopup) {
-        closeProfilePopup.addEventListener('click', closeUserProfilePopup);
-    }
-
-    // CHAT EVENT LISTENERS
-    if (openChatBtn) {
-        openChatBtn.addEventListener('click', openChatPopup);
-    }
-
-    if (closeChatBtn) {
-        closeChatBtn.addEventListener('click', closeChatPopup);
-    }
-
-    if (sendChatMessageBtn) {
-        sendChatMessageBtn.addEventListener('click', sendMessage);
-    }
-
-    if (chatMessageInput) {
-        chatMessageInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-    }
-
-    if (viewProfileInChatBtn) {
-        viewProfileInChatBtn.addEventListener('click', function () {
-            if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
-                closeChatPopup();
-                openUserProfilePopup({
-                    uid: currentChatOtherUser.uid,
-                    username: currentChatOtherUser.username
-                });
-            }
-        });
-    }
-
-    if (blockUserInChatBtn) {
-        blockUserInChatBtn.addEventListener('click', function () {
-            if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
-                blockUser(currentChatOtherUser.uid, currentChatOtherUser.username);
-            }
-        });
-    }
-
-    if (adminBroadcastBtn) {
-        adminBroadcastBtn.addEventListener('click', function () {
-            if (isCurrentUserModerator()) {
-                document.getElementById('broadcast-section').classList.toggle('hidden');
-            }
-        });
-    }
-
-    if (sendBroadcastBtn) {
-        sendBroadcastBtn.addEventListener('click', sendBroadcastMessage);
-    }
-
-    // Close chat popup when clicking outside
-    if (chatPopup) {
-        chatPopup.addEventListener('click', function (e) {
-            if (e.target === chatPopup) {
-                closeChatPopup();
-            }
-        });
-    }
-
-    // Close profile popup when clicking outside
-    if (userProfilePopup) {
-        userProfilePopup.addEventListener('click', function (e) {
-            if (e.target === userProfilePopup) {
-                closeUserProfilePopup();
-            }
-        });
-    }
-
-    // ===== ACCOUNT CREATION (UPDATED WITH CHAT PRIVACY) =====
-    createAccountBtn.addEventListener('click', async function () {
+    // ===== ACCOUNT FUNCTIONS =====
+    async function createAccount() {
         const username = document.getElementById('username').value.trim();
         const webhook = document.getElementById('webhook').value.trim();
 
         if (!username) {
-            showStatus('Please enter a username', 'error');
+            showStatus(statusMessage, 'Please enter a username', 'error');
             return;
         }
         if (!webhook) {
-            showStatus('Please enter a Discord webhook URL', 'error');
+            showStatus(statusMessage, 'Please enter a Discord webhook URL', 'error');
             return;
         }
         if (!webhook.startsWith('https://discord.com/api/webhooks/')) {
-            showStatus('Please enter a valid Discord webhook URL', 'error');
+            showStatus(statusMessage, 'Please enter a valid Discord webhook URL', 'error');
             return;
         }
 
@@ -1477,11 +1213,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const token = generateToken();
 
         try {
-            // Create auth user
             const userCredential = await createUserWithEmailAndPassword(auth, email, token);
             const uid = userCredential.user.uid;
 
-            // Store profile in Realtime Database (WITH CHAT PRIVACY)
             const accountProfile = {
                 username: username,
                 webhook: webhook,
@@ -1500,21 +1234,18 @@ document.addEventListener('DOMContentLoaded', function () {
                         showReputation: true,
                         showBets: true,
                         showPredictions: true,
-                        allowChats: true  // NEW: Chat privacy setting
+                        allowChats: true
                     }
                 }
             };
 
             await set(ref(db, `accounts/${uid}`), accountProfile);
-
-            // Create user search data
             await set(ref(db, `userSearch/${uid}`), {
                 username: username,
                 creationDate: accountProfile.creationDate,
                 profile: accountProfile.profile
             });
 
-            // Send token to Discord
             const payload = {
                 content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${token}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**`
             };
@@ -1525,12 +1256,11 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             if (!response.ok) {
-                showStatus('Account created, but failed to send token to Discord. Check your webhook.', 'error');
+                showStatus(statusMessage, 'Account created, but failed to send token to Discord. Check your webhook.', 'error');
             } else {
-                showStatus('Account created successfully! Token sent to your Discord.', 'success');
+                showStatus(statusMessage, 'Account created successfully! Token sent to your Discord.', 'success');
             }
 
-            // Sign out after creation
             try {
                 await signOut(auth);
             } catch (e) {
@@ -1546,21 +1276,19 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (error) {
             console.error('Create account error:', error);
             if (error.code === 'auth/email-already-in-use') {
-                showStatus('Username already taken. Please choose a different one.', 'error');
+                showStatus(statusMessage, 'Username already taken. Please choose a different one.', 'error');
             } else {
-                showStatus('Failed to create account. Please try again later.', 'error');
+                showStatus(statusMessage, 'Failed to create account. Please try again later.', 'error');
             }
         }
-    });
+    }
 
-    // ===== LOGIN =====
-    loginBtn.addEventListener('click', async function () {
+    async function login() {
         const username = document.getElementById('login-username').value.trim();
         const token = document.getElementById('login-token').value.trim();
 
         if (!username || !token) {
-            loginStatus.textContent = 'Please enter both username and token';
-            loginStatus.className = 'status error';
+            showStatus(loginStatus, 'Please enter both username and token', 'error');
             return;
         }
 
@@ -1568,16 +1296,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
         try {
             await signInWithEmailAndPassword(auth, email, token);
-            loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
-            loginStatus.className = 'status success';
+            showStatus(loginStatus, 'Login successful! Redirecting to dashboard...', 'success');
         } catch (error) {
             console.error('Login error:', error);
-            loginStatus.textContent = 'Invalid username or token. Please try again.';
-            loginStatus.className = 'status error';
+            showStatus(loginStatus, 'Invalid username or token. Please try again.', 'error');
         }
-    });
+    }
 
-    logoutBtn.addEventListener('click', async function () {
+    async function logout() {
         try {
             await signOut(auth);
         } catch (e) {
@@ -1588,10 +1314,9 @@ document.addEventListener('DOMContentLoaded', function () {
         currentUserUid = null;
         currentAccount = null;
         showLoginPage();
-    });
+    }
 
-    // ===== TOKEN REGENERATION =====
-    changeTokenBtn.addEventListener('click', async function () {
+    async function changeToken() {
         if (!currentAccount || !currentUserUid) return;
         const user = auth.currentUser;
         if (!user) return;
@@ -1609,8 +1334,7 @@ document.addEventListener('DOMContentLoaded', function () {
         );
 
         if (!choice) {
-            tokenStatus.textContent = 'Token generation cancelled.';
-            tokenStatus.className = 'status info';
+            showStatus(tokenStatus, 'Token generation cancelled.', 'info');
             return;
         }
 
@@ -1623,13 +1347,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 'https://discord.com/api/webhooks/...'
             );
             if (!newWebhook) {
-                tokenStatus.textContent = 'Token generation cancelled.';
-                tokenStatus.className = 'status info';
+                showStatus(tokenStatus, 'Token generation cancelled.', 'info');
                 return;
             }
             if (!newWebhook.startsWith('https://discord.com/api/webhooks/')) {
-                tokenStatus.textContent = 'Invalid webhook URL.';
-                tokenStatus.className = 'status error';
+                showStatus(tokenStatus, 'Invalid webhook URL.', 'error');
                 return;
             }
             targetWebhook = newWebhook;
@@ -1652,220 +1374,17 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             if (response.ok) {
-                tokenStatus.textContent = 'New token generated and sent to Discord.';
-                tokenStatus.className = 'status success';
+                showStatus(tokenStatus, 'New token generated and sent to Discord.', 'success');
             } else {
-                tokenStatus.textContent = 'Token updated, but sending to Discord failed.';
-                tokenStatus.className = 'status error';
+                showStatus(tokenStatus, 'Token updated, but sending to Discord failed.', 'error');
             }
         } catch (err) {
             console.error('Token regen error:', err);
-            tokenStatus.textContent = 'Failed to update token. Try re-logging and retry.';
-            tokenStatus.className = 'status error';
-        }
-    });
-
-    // ===== EVENT CREATION =====
-    addEventBtn.addEventListener('click', function () {
-        const title = document.getElementById('event-title').value.trim();
-        const teamA = document.getElementById('team-a').value.trim();
-        const teamB = document.getElementById('team-b').value.trim();
-        const date = document.getElementById('event-date').value;
-        const category = document.getElementById('event-category').value;
-
-        if (!title || !teamA || !teamB || !date) {
-            document.getElementById('event-status').textContent = 'Please fill in all fields';
-            document.getElementById('event-status').className = 'status error';
-            return;
-        }
-
-        const newEvent = {
-            id: Date.now().toString(),
-            title: title,
-            teamA: teamA,
-            teamB: teamB,
-            date: date,
-            category: category,
-            oddsA: 2.10,
-            oddsDraw: 3.25,
-            oddsB: 2.80,
-            createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
-        };
-
-        if (window.saveEventToFirebase) {
-            window.saveEventToFirebase(newEvent);
-        }
-
-        document.getElementById('event-status').textContent = 'Event added successfully!';
-        document.getElementById('event-status').className = 'status success';
-
-        document.getElementById('event-title').value = '';
-        document.getElementById('team-a').value = '';
-        document.getElementById('team-b').value = '';
-        document.getElementById('event-date').value = '';
-
-        setTimeout(() => {
-            document.getElementById('event-status').className = 'status';
-        }, 3000);
-    });
-
-    if (clearEventLogBtn) {
-        clearEventLogBtn.addEventListener('click', async function () {
-            if (!isCurrentUserModerator()) return;
-
-            const confirmClear = await showConfirmPopup(
-                'Clear Event Log',
-                'Are you sure you want to clear the entire event log? This cannot be undone.',
-                'Clear Log',
-                'Cancel'
-            );
-            if (!confirmClear) return;
-
-            try {
-                await set(eventLogRef, null);
-                eventLogStatus.textContent = 'Event log cleared.';
-                eventLogStatus.className = 'status success';
-            } catch (err) {
-                eventLogStatus.textContent = 'Failed to clear event log.';
-                eventLogStatus.className = 'status error';
-            }
-
-            setTimeout(() => {
-                eventLogStatus.className = 'status';
-            }, 3000);
-        });
-    }
-
-    const navLinks = document.querySelectorAll('.nav-link');
-    const tabContents = document.querySelectorAll('.tab-content');
-
-    navLinks.forEach(link => {
-        link.addEventListener('click', function (e) {
-            e.preventDefault();
-
-            navLinks.forEach(l => l.classList.remove('active'));
-            tabContents.forEach(content => content.classList.remove('active'));
-
-            this.classList.add('active');
-            const tabId = this.getAttribute('data-tab') + '-tab';
-            const tab = document.getElementById(tabId);
-            if (tab) tab.classList.add('active');
-
-            if (this.getAttribute('data-tab') === 'account') {
-                updateAccountInfo();
-            }
-            if (this.getAttribute('data-tab') === 'admin') {
-                updateAdminInfo();
-            }
-            if (this.getAttribute('data-tab') === 'ogws') {
-                loadEvents();
-            }
-            if (this.getAttribute('data-tab') === 'community') {
-                document.getElementById('users-grid').innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-users"></i>
-                        <h3>Search for Users</h3>
-                        <p>Use the search bar above to find other users on the platform.</p>
-                    </div>
-                `;
-            }
-        });
-    });
-
-    const categoryTabs = document.querySelectorAll('.category-tab');
-    const categoryContents = document.querySelectorAll('.category-content');
-
-    categoryTabs.forEach(tab => {
-        tab.addEventListener('click', function () {
-            categoryTabs.forEach(t => t.classList.remove('active'));
-            categoryContents.forEach(content => content.classList.remove('active'));
-
-            this.classList.add('active');
-            const category = this.getAttribute('data-category');
-            document.getElementById(`${category}-content`).classList.add('active');
-        });
-    });
-
-    // ===== GLOBAL AUTH STATE HANDLER =====
-    function checkLoginStatus() {
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                try {
-                    const uid = user.uid;
-                    const snap = await get(ref(db, `accounts/${uid}`));
-                    if (!snap.exists()) {
-                        currentUserUid = null;
-                        currentAccount = null;
-                        showLoginPage();
-                        return;
-                    }
-                    
-                    const accountData = snap.val() || {};
-                    
-                    if (accountData.deleted === true) {
-                        await showMessagePopup(
-                            'Account Deleted',
-                            'This account has been deleted by moderators. Please contact support if you believe this is a mistake.'
-                        );
-                        await signOut(auth);
-                        currentUserUid = null;
-                        currentAccount = null;
-                        showLoginPage();
-                        return;
-                    }
-                    
-                    currentUserUid = uid;
-                    currentAccount = accountData;
-
-                    sessionStorage.setItem('ogwXbet_currentUser', currentAccount.username || '');
-                    sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime().toString());
-
-                    showDashboard();
-                } catch (e) {
-                    console.error('Failed to load account profile:', e);
-                    currentUserUid = null;
-                    currentAccount = null;
-                    showLoginPage();
-                }
-            } else {
-                currentUserUid = null;
-                currentAccount = null;
-                showLoginPage();
-            }
-        });
-    }
-
-    // ===== INITIALIZE USER SEARCH DATA =====
-    async function initializeUserSearch() {
-        if (!currentUserUid || !currentAccount) return;
-        
-        try {
-            const searchSnap = await get(ref(db, `userSearch/${currentUserUid}`));
-            
-            if (!searchSnap.exists()) {
-                await set(ref(db, `userSearch/${currentUserUid}`), {
-                    username: currentAccount.username,
-                    creationDate: currentAccount.creationDate,
-                    profile: currentAccount.profile || {}
-                });
-            } else {
-                const searchData = searchSnap.val();
-                if (searchData.username !== currentAccount.username || 
-                    JSON.stringify(searchData.profile) !== JSON.stringify(currentAccount.profile || {})) {
-                    
-                    await set(ref(db, `userSearch/${currentUserUid}`), {
-                        username: currentAccount.username,
-                        creationDate: currentAccount.creationDate,
-                        profile: currentAccount.profile || {}
-                    });
-                }
-            }
-        } catch (err) {
-            console.error('Failed to initialize user search data:', err);
+            showStatus(tokenStatus, 'Failed to update token. Try re-logging and retry.', 'error');
         }
     }
 
-    // ===== UPDATED PROFILE FUNCTIONS WITH CHAT PRIVACY =====
+    // ===== PROFILE FUNCTIONS =====
     function updateProfilePicture() {
         const pictureUrl = document.getElementById('profile-picture-url').value.trim();
         const preview = document.getElementById('profile-picture-preview');
@@ -1874,41 +1393,30 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!pictureUrl) {
             preview.style.display = 'none';
             placeholder.style.display = 'flex';
-            profileStatus.textContent = 'Picture removed. Using placeholder.';
-            profileStatus.className = 'status info';
-            setTimeout(() => {
-                profileStatus.className = 'status';
-            }, 3000);
+            showStatus(profileStatus, 'Picture removed. Using placeholder.', 'info');
             return;
         }
 
         if (!pictureUrl.startsWith('http')) {
-            profileStatus.textContent = 'Please enter a valid URL starting with http:// or https://';
-            profileStatus.className = 'status error';
+            showStatus(profileStatus, 'Please enter a valid URL starting with http:// or https://', 'error');
             return;
         }
 
         preview.onerror = function() {
             preview.style.display = 'none';
             placeholder.style.display = 'flex';
-            profileStatus.textContent = 'Failed to load image from this URL. Using placeholder.';
-            profileStatus.className = 'status error';
+            showStatus(profileStatus, 'Failed to load image from this URL. Using placeholder.', 'error');
         };
         
         preview.onload = function() {
             preview.style.display = 'block';
             placeholder.style.display = 'none';
-            profileStatus.textContent = 'Picture updated successfully!';
-            profileStatus.className = 'status success';
-            setTimeout(() => {
-                profileStatus.className = 'status';
-            }, 3000);
+            showStatus(profileStatus, 'Picture updated successfully!', 'success');
         };
         
         preview.src = pictureUrl;
     }
 
-    // ===== SAVE PROFILE SETTINGS WITH CHAT PRIVACY =====
     async function saveProfileSettings() {
         if (!currentAccount || !currentUserUid) return;
 
@@ -1942,21 +1450,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 profile: currentAccount.profile
             });
 
-            profileStatus.textContent = 'Profile settings saved successfully!';
-            profileStatus.className = 'status success';
-
-            setTimeout(() => {
-                profileStatus.className = 'status';
-            }, 3000);
+            showStatus(profileStatus, 'Profile settings saved successfully!', 'success');
 
         } catch (err) {
             console.error('Failed to save profile settings:', err);
-            profileStatus.textContent = 'Failed to save profile settings. Please try again.';
-            profileStatus.className = 'status error';
+            showStatus(profileStatus, 'Failed to save profile settings. Please try again.', 'error');
         }
     }
 
-    // ===== SEARCH FUNCTION =====
+    // ===== SEARCH FUNCTIONS =====
     async function searchUsers() {
         const searchTerm = document.getElementById('user-search').value.trim().toLowerCase();
         const usersGrid = document.getElementById('users-grid');
@@ -2054,130 +1556,48 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function generateToken() {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let token = '';
-        for (let i = 0; i < 16; i++) {
-            token += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return token;
-    }
-
-    function showStatus(message, type) {
-        statusMessage.textContent = message;
-        statusMessage.className = `status ${type}`;
-        setTimeout(() => {
-            statusMessage.className = 'status';
-        }, 5000);
-    }
-
-    function isCurrentUserModerator() {
-        return !!(currentAccount && currentAccount.isModerator);
-    }
-
-    function showDashboard() {
-        if (!currentAccount) {
-            showLoginPage();
+    // ===== ADMIN FUNCTIONS =====
+    async function sendBroadcastMessage() {
+        if (!isCurrentUserModerator()) return;
+        
+        const message = broadcastMessageInput.value.trim();
+        if (!message) {
+            await showMessagePopup('Error', 'Please enter a message to broadcast.');
             return;
         }
-
-        loginPage.style.display = 'none';
-        dashboardPage.style.display = 'block';
-        document.getElementById('username-display').textContent =
-            `Welcome, ${currentAccount.username || 'User'}`;
-
-        if (currentAccount.isModerator) {
-            moderatorBadge.classList.remove('hidden');
-            adminNav.classList.remove('hidden');
-        } else {
-            moderatorBadge.classList.add('hidden');
-            adminNav.classList.add('hidden');
-        }
-
-        loadEvents();
-        updateAdminInfo();
-        updateAccountInfo();
         
-        initializeUserSearch();
-        loadAnnouncements();
+        const confirmSend = await showConfirmPopup(
+            'Confirm Broadcast',
+            'Are you sure you want to broadcast this message to all users?',
+            'Yes, Broadcast',
+            'Cancel'
+        );
+        
+        if (!confirmSend) return;
+        
+        try {
+            const broadcastMessage = {
+                text: message,
+                senderId: 'BOT',
+                timestamp: new Date().toISOString(),
+                isBroadcast: true,
+                sentBy: currentAccount.username
+            };
+            
+            const announcementsRef = ref(db, 'chats/announcements/messages');
+            await push(announcementsRef, broadcastMessage);
+            
+            broadcastMessageInput.value = '';
+            await showMessagePopup('Broadcast Sent', 'Message sent to all users successfully!');
+            
+        } catch (error) {
+            console.error('Failed to send broadcast:', error);
+            await showMessagePopup('Error', 'Failed to send broadcast. Please try again.');
+        }
     }
 
-    function showLoginPage() {
-        dashboardPage.style.display = 'none';
-        loginPage.style.display = 'flex';
-
-        document.getElementById('login-username').value = '';
-        document.getElementById('login-token').value = '';
-        document.getElementById('login-token').type = 'password';
-        document.getElementById('toggle-token').querySelector('i').className = 'fas fa-eye';
-        loginStatus.textContent = '';
-        loginStatus.className = 'status';
-
-        accountCreationSection.classList.add('hidden');
-        loginSection.classList.remove('hidden');
-    }
-
-    // ===== UPDATE ACCOUNT INFO WITH CHAT PRIVACY =====
-    function updateAccountInfo() {
-        if (!currentAccount) return;
-
-        document.getElementById('account-username').textContent = currentAccount.username || '-';
-        document.getElementById('account-creation-date').textContent =
-            currentAccount.creationDate ? new Date(currentAccount.creationDate).toLocaleDateString() : '-';
-        document.getElementById('total-bets').textContent =
-            Array.isArray(currentAccount.bets) ? currentAccount.bets.length : 0;
-        document.getElementById('winning-rate').textContent = '0%';
-
-        const reputation = typeof currentAccount.reputation === 'number'
-            ? currentAccount.reputation
-            : 0;
-        const repEl = document.getElementById('account-reputation');
-        if (repEl) {
-            repEl.textContent = reputation.toFixed(1);
-        }
-
-        const profile = currentAccount.profile || {};
-        const privacy = profile.privacy || {};
-
-        const picturePreview = document.getElementById('profile-picture-preview');
-        const placeholder = document.getElementById('profile-picture-placeholder');
-        const pictureUrlInput = document.getElementById('profile-picture-url');
-        
-        if (picturePreview && placeholder && pictureUrlInput) {
-            if (profile.picture) {
-                picturePreview.src = profile.picture;
-                picturePreview.style.display = 'block';
-                placeholder.style.display = 'none';
-            } else {
-                picturePreview.style.display = 'none';
-                placeholder.style.display = 'flex';
-            }
-            pictureUrlInput.value = profile.picture || '';
-        }
-
-        const bioInput = document.getElementById('user-bio');
-        if (bioInput) {
-            bioInput.value = profile.bio || '';
-        }
-
-        const reputationCheckbox = document.getElementById('privacy-reputation');
-        const betsCheckbox = document.getElementById('privacy-bets');
-        const predictionsCheckbox = document.getElementById('privacy-predictions');
-        const chatsCheckbox = document.getElementById('privacy-chats');
-        
-        if (reputationCheckbox) reputationCheckbox.checked = privacy.showReputation !== false;
-        if (betsCheckbox) betsCheckbox.checked = privacy.showBets !== false;
-        if (predictionsCheckbox) predictionsCheckbox.checked = privacy.showPredictions !== false;
-        if (chatsCheckbox) chatsCheckbox.checked = privacy.allowChats !== false;
-
-        renderPredictionsList(currentAccount);
-    }
-
-    // ===== UPDATED ADMIN INFO =====
     async function updateAdminInfo() {
-        if (!currentAccount || !currentAccount.isModerator) {
-            return;
-        }
+        if (!currentAccount || !currentAccount.isModerator) return;
 
         let userCount = 0;
         let deletedUserCount = 0;
@@ -2290,13 +1710,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== DELETE ACCOUNT =====
     async function deleteAccount(uid, username) {
         if (!isCurrentUserModerator()) return;
 
         const confirmDelete = await showConfirmPopup(
             'Delete Account',
-            `Are you sure you want to delete the account "${username}"? This will prevent the user from logging in.`,
+            `Delete account "${username}"?`,
             'Delete Account',
             'Cancel'
         );
@@ -2313,29 +1732,21 @@ document.addEventListener('DOMContentLoaded', function () {
             await update(ref(db, `accounts/${uid}`), updates);
             await remove(ref(db, `userSearch/${uid}`));
 
-            await showMessagePopup(
-                'Account Deleted',
-                `Account "${username}" has been successfully deleted. The user will be logged out if currently active.`
-            );
-
+            await showMessagePopup('Account Deleted', `Account "${username}" has been deleted.`);
             updateAdminInfo();
 
         } catch (err) {
             console.error('Failed to delete account:', err);
-            await showMessagePopup(
-                'Error',
-                'Failed to delete account. Please try again.'
-            );
+            await showMessagePopup('Error', 'Failed to delete account. Please try again.');
         }
     }
 
-    // ===== RESTORE ACCOUNT =====
     async function restoreAccount(uid, username) {
         if (!isCurrentUserModerator()) return;
 
         const confirmRestore = await showConfirmPopup(
             'Restore Account',
-            `Are you sure you want to restore the account "${username}"? The user will be able to log in again.`,
+            `Restore account "${username}"?`,
             'Restore Account',
             'Cancel'
         );
@@ -2364,23 +1775,118 @@ document.addEventListener('DOMContentLoaded', function () {
                 profile: accountData.profile || {}
             });
 
-            await showMessagePopup(
-                'Account Restored',
-                `Account "${username}" has been successfully restored. The user can now log in again.`
-            );
-
+            await showMessagePopup('Account Restored', `Account "${username}" has been restored.`);
             updateAdminInfo();
 
         } catch (err) {
             console.error('Failed to restore account:', err);
-            await showMessagePopup(
-                'Error',
-                'Failed to restore account. Please try again.'
-            );
+            await showMessagePopup('Error', 'Failed to restore account. Please try again.');
         }
     }
 
-    // ===== PREDICTIONS LIST RENDERING =====
+    async function clearEventLog() {
+        if (!isCurrentUserModerator()) return;
+
+        const confirmClear = await showConfirmPopup(
+            'Clear Event Log',
+            'Clear the entire event log?',
+            'Clear Log',
+            'Cancel'
+        );
+        if (!confirmClear) return;
+
+        try {
+            await set(eventLogRef, null);
+            showStatus(eventLogStatus, 'Event log cleared.', 'success');
+        } catch (err) {
+            showStatus(eventLogStatus, 'Failed to clear event log.', 'error');
+        }
+
+        setTimeout(() => {
+            eventLogStatus.className = 'status';
+        }, 3000);
+    }
+
+    // ===== EVENT FUNCTIONS =====
+    window.saveEventToFirebase = function (eventObj) {
+        const newRef = push(eventsRef);
+        set(newRef, eventObj);
+    };
+
+    onValue(eventsRef, snapshot => {
+        const events = [];
+        const idToKey = {};
+
+        snapshot.forEach(childSnap => {
+            const ev = childSnap.val() || {};
+            ev._key = childSnap.key;
+            events.push(ev);
+            if (ev.id) {
+                idToKey[ev.id] = childSnap.key;
+            }
+        });
+
+        window.latestEvents = events;
+        window.eventKeyMap = idToKey;
+
+        if (window.displayFirebaseEvents) {
+            window.displayFirebaseEvents(events);
+        }
+    });
+
+    onValue(eventLogRef, snapshot => {
+        const logs = [];
+        snapshot.forEach(childSnap => {
+            const entry = childSnap.val() || {};
+            entry._key = childSnap.key;
+            logs.push(entry);
+        });
+        window.eventLogEntries = logs;
+        if (window.renderEventLog) {
+            window.renderEventLog();
+        }
+    });
+
+    function addEvent() {
+        const title = document.getElementById('event-title').value.trim();
+        const teamA = document.getElementById('team-a').value.trim();
+        const teamB = document.getElementById('team-b').value.trim();
+        const date = document.getElementById('event-date').value;
+        const category = document.getElementById('event-category').value;
+
+        if (!title || !teamA || !teamB || !date) {
+            const eventStatus = document.getElementById('event-status');
+            showStatus(eventStatus, 'Please fill in all fields', 'error');
+            return;
+        }
+
+        const newEvent = {
+            id: Date.now().toString(),
+            title: title,
+            teamA: teamA,
+            teamB: teamB,
+            date: date,
+            category: category,
+            oddsA: 2.10,
+            oddsDraw: 3.25,
+            oddsB: 2.80,
+            createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
+        };
+
+        if (window.saveEventToFirebase) {
+            window.saveEventToFirebase(newEvent);
+        }
+
+        const eventStatus = document.getElementById('event-status');
+        showStatus(eventStatus, 'Event added successfully!', 'success');
+
+        document.getElementById('event-title').value = '';
+        document.getElementById('team-a').value = '';
+        document.getElementById('team-b').value = '';
+        document.getElementById('event-date').value = '';
+    }
+
+    // ===== PREDICTION FUNCTIONS =====
     function renderPredictionsList(accountData) {
         const list = document.getElementById('predictions-list');
         if (!list) return;
@@ -2433,7 +1939,7 @@ document.addEventListener('DOMContentLoaded', function () {
         list.innerHTML = html;
     }
 
-    // ===== DISPLAY EVENTS WITH PREDICTION STATUS =====
+    // ===== DISPLAY FUNCTIONS =====
     window.displayFirebaseEvents = function (events) {
         document.getElementById('upcoming-events').innerHTML = '';
         document.getElementById('active-events').innerHTML = '';
@@ -2489,15 +1995,6 @@ document.addEventListener('DOMContentLoaded', function () {
             `;
         }
     };
-
-    function loadEvents() {
-        try {
-            const events = window.latestEvents || [];
-            window.displayFirebaseEvents(events);
-        } catch (error) {
-            console.log('Error loading events');
-        }
-    }
 
     function displayEvents(events, container, category) {
         if (!events || events.length === 0) return;
@@ -2587,7 +2084,282 @@ document.addEventListener('DOMContentLoaded', function () {
         container.innerHTML = eventsHTML;
     }
 
-    // Event delegation for moderator 3-dots menu and predictions
+    // ===== PAGE MANAGEMENT =====
+    function showDashboard() {
+        if (!currentAccount) {
+            showLoginPage();
+            return;
+        }
+
+        loginPage.style.display = 'none';
+        dashboardPage.style.display = 'block';
+        document.getElementById('username-display').textContent =
+            `Welcome, ${currentAccount.username || 'User'}`;
+
+        if (currentAccount.isModerator) {
+            moderatorBadge.classList.remove('hidden');
+            adminNav.classList.remove('hidden');
+        } else {
+            moderatorBadge.classList.add('hidden');
+            adminNav.classList.add('hidden');
+        }
+
+        loadEvents();
+        updateAdminInfo();
+        updateAccountInfo();
+    }
+
+    function showLoginPage() {
+        dashboardPage.style.display = 'none';
+        loginPage.style.display = 'flex';
+
+        document.getElementById('login-username').value = '';
+        document.getElementById('login-token').value = '';
+        document.getElementById('login-token').type = 'password';
+        if (toggleTokenBtn) {
+            toggleTokenBtn.querySelector('i').className = 'fas fa-eye';
+        }
+        loginStatus.textContent = '';
+        loginStatus.className = 'status';
+
+        accountCreationSection.classList.add('hidden');
+        loginSection.classList.remove('hidden');
+    }
+
+    function updateAccountInfo() {
+        if (!currentAccount) return;
+
+        document.getElementById('account-username').textContent = currentAccount.username || '-';
+        document.getElementById('account-creation-date').textContent =
+            currentAccount.creationDate ? new Date(currentAccount.creationDate).toLocaleDateString() : '-';
+        document.getElementById('total-bets').textContent =
+            Array.isArray(currentAccount.bets) ? currentAccount.bets.length : 0;
+        document.getElementById('winning-rate').textContent = '0%';
+
+        const reputation = typeof currentAccount.reputation === 'number'
+            ? currentAccount.reputation
+            : 0;
+        const repEl = document.getElementById('account-reputation');
+        if (repEl) {
+            repEl.textContent = reputation.toFixed(1);
+        }
+
+        const profile = currentAccount.profile || {};
+        const privacy = profile.privacy || {};
+
+        const picturePreview = document.getElementById('profile-picture-preview');
+        const placeholder = document.getElementById('profile-picture-placeholder');
+        const pictureUrlInput = document.getElementById('profile-picture-url');
+        
+        if (picturePreview && placeholder && pictureUrlInput) {
+            if (profile.picture) {
+                picturePreview.src = profile.picture;
+                picturePreview.style.display = 'block';
+                placeholder.style.display = 'none';
+            } else {
+                picturePreview.style.display = 'none';
+                placeholder.style.display = 'flex';
+            }
+            pictureUrlInput.value = profile.picture || '';
+        }
+
+        const bioInput = document.getElementById('user-bio');
+        if (bioInput) {
+            bioInput.value = profile.bio || '';
+        }
+
+        const reputationCheckbox = document.getElementById('privacy-reputation');
+        const betsCheckbox = document.getElementById('privacy-bets');
+        const predictionsCheckbox = document.getElementById('privacy-predictions');
+        const chatsCheckbox = document.getElementById('privacy-chats');
+        
+        if (reputationCheckbox) reputationCheckbox.checked = privacy.showReputation !== false;
+        if (betsCheckbox) betsCheckbox.checked = privacy.showBets !== false;
+        if (predictionsCheckbox) predictionsCheckbox.checked = privacy.showPredictions !== false;
+        if (chatsCheckbox) chatsCheckbox.checked = privacy.allowChats !== false;
+
+        renderPredictionsList(currentAccount);
+    }
+
+    async function refreshAccountData() {
+        if (!currentUserUid) return;
+        
+        try {
+            const snap = await get(ref(db, `accounts/${currentUserUid}`));
+            if (snap.exists()) {
+                currentAccount = snap.val() || {};
+                updateAccountInfo();
+                loadEvents();
+                
+                if (profileStatus) {
+                    showStatus(profileStatus, 'Account data refreshed successfully!', 'success');
+                }
+            }
+        } catch (err) {
+            console.error('Failed to refresh account data:', err);
+            if (profileStatus) {
+                showStatus(profileStatus, 'Failed to refresh data. Please try again.', 'error');
+            }
+        }
+    }
+
+    // ===== EVENT HANDLERS =====
+    function loadEvents() {
+        try {
+            const events = window.latestEvents || [];
+            window.displayFirebaseEvents(events);
+        } catch (error) {
+            console.log('Error loading events');
+        }
+    }
+
+    // ===== EVENT LISTENERS =====
+    showRegisterBtn.addEventListener('click', function () {
+        loginSection.classList.add('hidden');
+        accountCreationSection.classList.remove('hidden');
+    });
+
+    showLoginBtn.addEventListener('click', function () {
+        accountCreationSection.classList.add('hidden');
+        loginSection.classList.remove('hidden');
+    });
+
+    if (toggleTokenBtn) {
+        toggleTokenBtn.addEventListener('click', function () {
+            const tokenInput = document.getElementById('login-token');
+            const icon = this.querySelector('i');
+            if (tokenInput.type === 'password') {
+                tokenInput.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                tokenInput.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        });
+    }
+
+    if (createAccountBtn) createAccountBtn.addEventListener('click', createAccount);
+    if (loginBtn) loginBtn.addEventListener('click', login);
+    if (logoutBtn) logoutBtn.addEventListener('click', logout);
+    if (changeTokenBtn) changeTokenBtn.addEventListener('click', changeToken);
+    if (addEventBtn) addEventBtn.addEventListener('click', addEvent);
+    if (clearEventLogBtn) clearEventLogBtn.addEventListener('click', clearEventLog);
+    if (updatePictureBtn) updatePictureBtn.addEventListener('click', updateProfilePicture);
+    if (saveProfileBtn) saveProfileBtn.addEventListener('click', saveProfileSettings);
+    if (searchUserBtn) searchUserBtn.addEventListener('click', searchUsers);
+    if (refreshPredictionsBtn) refreshPredictionsBtn.addEventListener('click', refreshAccountData);
+    if (closeProfilePopup) closeProfilePopup.addEventListener('click', closeUserProfilePopup);
+
+    // Chat event listeners
+    if (openChatBtn) openChatBtn.addEventListener('click', openChatPopup);
+    if (closeChatBtn) closeChatBtn.addEventListener('click', closeChatPopup);
+    if (sendChatMessageBtn) sendChatMessageBtn.addEventListener('click', sendMessage);
+    if (chatMessageInput) {
+        chatMessageInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    }
+    if (viewProfileInChatBtn) {
+        viewProfileInChatBtn.addEventListener('click', function () {
+            if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
+                closeChatPopup();
+                openUserProfilePopup({
+                    uid: currentChatOtherUser.uid,
+                    username: currentChatOtherUser.username
+                });
+            }
+        });
+    }
+    if (blockUserInChatBtn) {
+        blockUserInChatBtn.addEventListener('click', function () {
+            if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
+                blockUser(currentChatOtherUser.uid, currentChatOtherUser.username);
+            }
+        });
+    }
+    if (adminBroadcastBtn) {
+        adminBroadcastBtn.addEventListener('click', function () {
+            if (isCurrentUserModerator()) {
+                const broadcastSection = document.getElementById('broadcast-section');
+                broadcastSection.classList.toggle('hidden');
+            }
+        });
+    }
+    if (sendBroadcastBtn) sendBroadcastBtn.addEventListener('click', sendBroadcastMessage);
+
+    // Close popups when clicking outside
+    if (chatPopup) {
+        chatPopup.addEventListener('click', function (e) {
+            if (e.target === chatPopup) {
+                closeChatPopup();
+            }
+        });
+    }
+    if (userProfilePopup) {
+        userProfilePopup.addEventListener('click', function (e) {
+            if (e.target === userProfilePopup) {
+                closeUserProfilePopup();
+            }
+        });
+    }
+
+    // Tab navigation
+    const navLinks = document.querySelectorAll('.nav-link');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    navLinks.forEach(link => {
+        link.addEventListener('click', function (e) {
+            e.preventDefault();
+
+            navLinks.forEach(l => l.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+
+            this.classList.add('active');
+            const tabId = this.getAttribute('data-tab') + '-tab';
+            const tab = document.getElementById(tabId);
+            if (tab) tab.classList.add('active');
+
+            if (this.getAttribute('data-tab') === 'account') {
+                updateAccountInfo();
+            }
+            if (this.getAttribute('data-tab') === 'admin') {
+                updateAdminInfo();
+            }
+            if (this.getAttribute('data-tab') === 'ogws') {
+                loadEvents();
+            }
+            if (this.getAttribute('data-tab') === 'community') {
+                document.getElementById('users-grid').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-users"></i>
+                        <h3>Search for Users</h3>
+                        <p>Use the search bar above to find other users on the platform.</p>
+                    </div>
+                `;
+            }
+        });
+    });
+
+    const categoryTabs = document.querySelectorAll('.category-tab');
+    const categoryContents = document.querySelectorAll('.category-content');
+
+    categoryTabs.forEach(tab => {
+        tab.addEventListener('click', function () {
+            categoryTabs.forEach(t => t.classList.remove('active'));
+            categoryContents.forEach(content => content.classList.remove('active'));
+
+            this.classList.add('active');
+            const category = this.getAttribute('data-category');
+            document.getElementById(`${category}-content`).classList.add('active');
+        });
+    });
+
+    // Event delegation for moderator menu and predictions
     document.addEventListener('click', function (e) {
         const menuBtn = e.target.closest('.event-menu');
         if (menuBtn && isCurrentUserModerator()) {
@@ -2604,7 +2376,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // ===== EVENT MENU WITH 3 OPTIONS =====
+    // ===== EVENT MENU HANDLING =====
     async function handleEventMenu(eventId) {
         const action = await showChoicePopup(
             'Event Actions',
@@ -2631,7 +2403,6 @@ document.addEventListener('DOMContentLoaded', function () {
         return events.find(ev => ev.id === eventId);
     }
 
-    // ===== SINGLE-FORM EDIT FUNCTION =====
     async function editEventFull(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -2719,7 +2490,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== SMART MOVE FUNCTION =====
     async function moveEventSmart(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
@@ -2738,7 +2508,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (newCategory === 'ended') {
             const winnerChoice = await showChoicePopup(
                 'End Event & Resolve Predictions',
-                `Who won "${eventObj.title}"? This will award reputation to correct predictions.`,
+                `Who won "${eventObj.title}"?`,
                 [
                     { label: eventObj.teamA, value: 'A' },
                     { label: eventObj.teamB, value: 'B' }
@@ -2746,14 +2516,10 @@ document.addEventListener('DOMContentLoaded', function () {
             );
             if (!winnerChoice) return;
 
-            console.log('Resolving predictions for event:', eventObj.title, 'Winner:', winnerChoice);
             await resolveEventPredictions(eventObj, winnerChoice);
 
-            await showMessagePopup(
-                'Predictions Resolved', 
-                `Event ended! Reputation has been awarded to users with correct predictions.`
-            );
-
+            await showMessagePopup('Predictions Resolved', 'Event ended! Reputation has been awarded.');
+            
             const winnerName = winnerChoice === 'A' ? eventObj.teamA : eventObj.teamB;
             const moderatorName = currentAccount && currentAccount.username ? currentAccount.username : 'Unknown';
             
@@ -2796,14 +2562,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== DELETE EVENT FUNCTION =====
     async function deleteEvent(eventId) {
         const eventObj = findEventById(eventId);
         if (!eventObj) return;
 
         const confirmDelete = await showConfirmPopup(
             'Delete Event',
-            `Are you sure you want to delete "${eventObj.title}"? This will move it to the event log.`,
+            `Delete "${eventObj.title}"?`,
             'Delete Event',
             'Cancel'
         );
@@ -2839,7 +2604,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // ===== RESOLVE EVENT PREDICTIONS =====
     async function resolveEventPredictions(eventObj, winnerChoice) {
         try {
             const snap = await get(accountsRef);
@@ -2865,8 +2629,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                         acc.reputation += correct ? 1 : -0.5;
                         changed = true;
-                        
-                        console.log(`User ${acc.username}: Predicted ${userChoice}, Winner ${actualWinner}, Correct: ${correct}`);
                     }
                 });
 
@@ -2877,37 +2639,26 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (Object.keys(updates).length > 0) {
                 await update(ref(db), updates);
-                console.log('Updated predictions for', Object.keys(updates).length, 'accounts');
             }
         } catch (err) {
             console.error('Failed to resolve predictions:', err);
         }
     }
 
-    // ===== PREDICTION HANDLING =====
     async function handlePrediction(eventId, choice) {
         if (!currentAccount || !currentUserUid) {
-            await showMessagePopup(
-                'Login Required',
-                'You must be logged in to make predictions.'
-            );
+            await showMessagePopup('Login Required', 'You must be logged in to make predictions.');
             return;
         }
 
         const eventObj = findEventById(eventId);
         if (!eventObj) {
-            await showMessagePopup(
-                'Error',
-                'Event not found.'
-            );
+            await showMessagePopup('Error', 'Event not found.');
             return;
         }
 
         if (eventObj.category === 'ended') {
-            await showMessagePopup(
-                'Event Ended',
-                'This event has already ended. You cannot make new predictions.'
-            );
+            await showMessagePopup('Event Ended', 'This event has already ended.');
             return;
         }
 
@@ -2924,7 +2675,7 @@ document.addEventListener('DOMContentLoaded', function () {
             
             const confirmSwitch = await showConfirmPopup(
                 'Switch Prediction',
-                `You already predicted ${existing.choice === 'A' ? eventObj.teamA : eventObj.teamB}. Do you want to switch to ${choice === 'A' ? eventObj.teamA : eventObj.teamB}?`,
+                `Switch to ${choice === 'A' ? eventObj.teamA : eventObj.teamB}?`,
                 'Switch',
                 'Keep Current'
             );
@@ -2978,35 +2729,59 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ===== FORCE ACCOUNT REFRESH FUNCTION =====
-    async function refreshAccountData() {
-        if (!currentUserUid) return;
-        
-        try {
-            const snap = await get(ref(db, `accounts/${currentUserUid}`));
-            if (snap.exists()) {
-                currentAccount = snap.val() || {};
-                updateAccountInfo();
-                loadEvents();
-                
-                if (profileStatus) {
-                    profileStatus.textContent = 'Account data refreshed successfully!';
-                    profileStatus.className = 'status success';
-                    setTimeout(() => {
-                        profileStatus.className = 'status';
-                    }, 3000);
+    // ===== AUTH STATE HANDLER =====
+    function checkLoginStatus() {
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                try {
+                    const uid = user.uid;
+                    const snap = await get(ref(db, `accounts/${uid}`));
+                    if (!snap.exists()) {
+                        currentUserUid = null;
+                        currentAccount = null;
+                        showLoginPage();
+                        return;
+                    }
+                    
+                    const accountData = snap.val() || {};
+                    
+                    if (accountData.deleted === true) {
+                        await showMessagePopup(
+                            'Account Deleted',
+                            'This account has been deleted by moderators.'
+                        );
+                        await signOut(auth);
+                        currentUserUid = null;
+                        currentAccount = null;
+                        showLoginPage();
+                        return;
+                    }
+                    
+                    currentUserUid = uid;
+                    currentAccount = accountData;
+
+                    sessionStorage.setItem('ogwXbet_currentUser', currentAccount.username || '');
+                    sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime().toString());
+
+                    showDashboard();
+                } catch (e) {
+                    console.error('Failed to load account profile:', e);
+                    currentUserUid = null;
+                    currentAccount = null;
+                    showLoginPage();
                 }
+            } else {
+                currentUserUid = null;
+                currentAccount = null;
+                showLoginPage();
             }
-        } catch (err) {
-            console.error('Failed to refresh account data:', err);
-            if (profileStatus) {
-                profileStatus.textContent = 'Failed to refresh data. Please try again.';
-                profileStatus.className = 'status error';
-            }
-        }
+        });
     }
 
-    // Admin event log renderer
+    // ===== INITIALIZATION =====
+    checkLoginStatus();
+
+    // ===== EVENT LOG RENDERER =====
     window.renderEventLog = function () {
         const tbody = document.getElementById('event-log-body');
         if (!tbody) return;
@@ -3044,48 +2819,5 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         tbody.innerHTML = html;
-    };
-
-    // ===== MIGRATION HELPER =====
-    window.migrateExistingUsersToSearch = async function () {
-        const auth = getAuth();
-        const user = auth.currentUser;
-        
-        if (!user) {
-            console.log('Please log in as a moderator first');
-            return;
-        }
-        
-        try {
-            const accountsSnap = await get(accountsRef);
-            let migrated = 0;
-            
-            if (accountsSnap.exists()) {
-                const promises = [];
-                
-                accountsSnap.forEach(childSnap => {
-                    const uid = childSnap.key;
-                    const account = childSnap.val() || {};
-                    
-                    if (!account.deleted) {
-                        const searchData = {
-                            username: account.username,
-                            creationDate: account.creationDate,
-                            profile: account.profile || {}
-                        };
-                        
-                        promises.push(set(ref(db, `userSearch/${uid}`), searchData));
-                        migrated++;
-                    }
-                });
-                
-                await Promise.all(promises);
-                console.log(`Successfully migrated ${migrated} users to search index`);
-                await showMessagePopup('Migration Complete', `Successfully migrated ${migrated} users to search index.`);
-            }
-        } catch (err) {
-            console.error('Migration failed:', err);
-            await showMessagePopup('Migration Failed', 'Failed to migrate users. Check console for details.');
-        }
     };
 });
