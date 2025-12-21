@@ -1,5 +1,7 @@
 // Firebase imports
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+import {
+    initializeApp
+} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
 
 import {
     getDatabase,
@@ -9,7 +11,9 @@ import {
     set,
     remove,
     get,
-    update
+    update,
+    onChildAdded,
+    onChildRemoved
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
 import {
@@ -41,9 +45,7 @@ const eventsRef = ref(db, "events");
 const eventLogRef = ref(db, "eventLog");
 const accountsRef = ref(db, "accounts");
 const userSearchRef = ref(db, "userSearch");
-
-// NEW: chats + blocks
-const announcementsMessagesRef = ref(db, "chats/announcements/messages");
+const chatsRef = ref(db, "chats");
 const blocksRef = ref(db, "blocks");
 
 // Map of eventId -> firebase key
@@ -91,6 +93,12 @@ onValue(eventLogRef, snapshot => {
     }
 });
 
+// Chat state variables
+let currentChatId = null;
+let currentChatOtherUser = null;
+let chatListeners = {};
+let chatListListener = null;
+
 document.addEventListener('DOMContentLoaded', function () {
     const loginPage = document.getElementById('login-page');
     const dashboardPage = document.getElementById('dashboard-page');
@@ -113,7 +121,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const tokenStatus = document.getElementById('token-status');
     const eventLogStatus = document.getElementById('event-log-status');
 
-    // ===== PHASE 1: NEW ELEMENTS =====
+    // Existing elements
     const updatePictureBtn = document.getElementById('update-picture-btn');
     const saveProfileBtn = document.getElementById('save-profile-btn');
     const profileStatus = document.getElementById('profile-status');
@@ -122,42 +130,24 @@ document.addEventListener('DOMContentLoaded', function () {
     const closeProfilePopup = document.getElementById('close-profile-popup');
     const userProfilePopup = document.getElementById('user-profile-popup');
 
-    // ===== CHAT ELEMENTS (use FALLBACK selectors so it always works) =====
-    const openChatBtn =
-        document.getElementById('open-chat-btn') ||
-        document.getElementById('chat-open-btn') ||
-        document.querySelector('[data-open-chat="true"]') ||
-        document.querySelector('.open-chat-btn');
-
-    const chatOverlay =
-        document.getElementById('chat-overlay') ||
-        document.getElementById('chats-overlay') ||
-        document.getElementById('chat-modal') ||
-        document.querySelector('.chat-overlay') ||
-        document.querySelector('.chats-overlay') ||
-        document.querySelector('.chat-modal');
-
-    // close button: we will also support delegation, but try direct binding too
-    const closeChatBtn =
-        document.getElementById('close-chat-btn') ||
-        document.getElementById('chat-close-btn') ||
-        (chatOverlay ? chatOverlay.querySelector('.chat-close') : null) ||
-        (chatOverlay ? chatOverlay.querySelector('[data-close-chat="true"]') : null) ||
-        (chatOverlay ? chatOverlay.querySelector('[data-action="close-chat"]') : null);
-
-    const chatListEl = document.getElementById('chat-list') || document.querySelector('.chat-list');
-    const chatSearchEl = document.getElementById('chat-search') || document.querySelector('.chat-search');
-    const chatMessagesEl = document.getElementById('chat-messages') || document.querySelector('.chat-messages');
-    const chatSelectedTitleEl = document.getElementById('chat-selected-title') || document.querySelector('.chat-selected-title');
-    const chatSelectedSubtitleEl = document.getElementById('chat-selected-subtitle') || document.querySelector('.chat-selected-subtitle');
-    const chatMessageInputEl = document.getElementById('chat-message-input') || document.querySelector('.chat-message-input');
-    const sendChatMessageBtn = document.getElementById('send-chat-message-btn') || document.querySelector('.send-chat-message-btn');
-    const chatStatusEl = document.getElementById('chat-status') || document.querySelector('.chat-status');
-
-    // Optional admin sender (if exists)
-    const announcementMessageEl = document.getElementById('announcement-message');
-    const sendAnnouncementBtn = document.getElementById('send-announcement-btn');
-    const announcementStatusEl = document.getElementById('announcement-status');
+    // CHAT SYSTEM ELEMENTS
+    const openChatBtn = document.getElementById('open-chat-btn');
+    const chatPopup = document.getElementById('chat-popup');
+    const closeChatBtn = document.getElementById('close-chat-btn');
+    const chatListContainer = document.getElementById('chat-list');
+    const chatMessagesContainer = document.getElementById('chat-messages');
+    const chatMessageInput = document.getElementById('chat-message-input');
+    const sendChatMessageBtn = document.getElementById('send-chat-message');
+    const chatHeaderUsername = document.getElementById('chat-header-username');
+    const chatHeaderStatus = document.getElementById('chat-header-status');
+    const viewProfileInChatBtn = document.getElementById('view-profile-in-chat');
+    const blockUserInChatBtn = document.getElementById('block-user-in-chat');
+    const startChatBtn = document.getElementById('start-chat-btn');
+    const chatSearchInput = document.getElementById('chat-search-input');
+    const newChatBtn = document.getElementById('new-chat-btn');
+    const adminBroadcastBtn = document.getElementById('admin-broadcast-btn');
+    const broadcastMessageInput = document.getElementById('broadcast-message-input');
+    const sendBroadcastBtn = document.getElementById('send-broadcast-btn');
 
     // ===== CUSTOM POPUP SYSTEM =====
     const popupOverlay = document.getElementById('popup-overlay');
@@ -168,108 +158,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
     let currentUserUid = null;
     let currentAccount = null;
-
-    // Chat state
-    let announcementsUnsub = null;
-    let isChatOpen = false;
-
-    // ===== FIX: FORCE chat overlay hidden on load, in a way CSS can't override =====
-    function forceHideChatOverlay() {
-        if (!chatOverlay) return;
-        chatOverlay.classList.add('hidden');
-        chatOverlay.style.display = 'none';
-        chatOverlay.style.pointerEvents = 'none';
-        chatOverlay.setAttribute('aria-hidden', 'true');
-        isChatOpen = false;
-    }
-
-    function forceShowChatOverlay() {
-        if (!chatOverlay) return;
-        chatOverlay.classList.remove('hidden');
-        chatOverlay.style.display = 'flex';
-        chatOverlay.style.pointerEvents = 'auto';
-        chatOverlay.setAttribute('aria-hidden', 'false');
-        isChatOpen = true;
-    }
-
-    forceHideChatOverlay();
-
-    // ===== Bulletproof close (works even if ids/classes change) =====
-    function closeChatOverlay() {
-        // stop announcements listener
-        if (typeof announcementsUnsub === 'function') {
-            try { announcementsUnsub(); } catch (e) {}
-        }
-        announcementsUnsub = null;
-
-        forceHideChatOverlay();
-        if (chatSelectedTitleEl) chatSelectedTitleEl.textContent = 'Select a chat';
-        if (chatSelectedSubtitleEl) chatSelectedSubtitleEl.textContent = '';
-        if (chatMessagesEl) {
-            chatMessagesEl.innerHTML = `
-                <div class="chat-empty-state">
-                    <i class="fas fa-comments"></i>
-                    <h3>Select a chat</h3>
-                    <p>Choose Announcements or a conversation.</p>
-                </div>
-            `;
-        }
-    }
-
-    function openChatOverlay() {
-        forceShowChatOverlay();
-        renderPinnedAnnouncementsChat();
-        selectAnnouncementsChat();
-    }
-
-    // Close via direct button if found
-    if (closeChatBtn) {
-        closeChatBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            closeChatOverlay();
-        });
-    }
-
-    // Close via clicking the dark background (overlay itself)
-    if (chatOverlay) {
-        chatOverlay.addEventListener('mousedown', (e) => {
-            if (e.target === chatOverlay) closeChatOverlay();
-        });
-    }
-
-    // Close via ESC key
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && isChatOpen) {
-            closeChatOverlay();
-        }
-    });
-
-    // Close via event delegation (covers X button even if selector differs)
-    document.addEventListener('click', (e) => {
-        if (!isChatOpen) return;
-
-        const closeHit =
-            e.target.closest('#close-chat-btn') ||
-            e.target.closest('#chat-close-btn') ||
-            e.target.closest('.chat-close') ||
-            e.target.closest('[data-close-chat="true"]') ||
-            e.target.closest('[data-action="close-chat"]') ||
-            e.target.closest('[data-modal-close="chat"]');
-
-        if (closeHit) {
-            e.preventDefault();
-            closeChatOverlay();
-        }
-    });
-
-    // Open button
-    if (openChatBtn) {
-        openChatBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            openChatOverlay();
-        });
-    }
 
     function closePopup() {
         if (!popupOverlay) return;
@@ -286,7 +174,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            const { title = 'Message', message = '', showInput = false, inputDefault = '', buttons = [] } = options || {};
+            const {
+                title = 'Message',
+                message = '',
+                showInput = false,
+                inputDefault = '',
+                buttons = []
+            } = options || {};
 
             popupTitle.textContent = title;
             popupMessage.textContent = message;
@@ -306,10 +200,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 const b = document.createElement('button');
                 b.textContent = btn.text || 'OK';
                 b.classList.add('popup-btn');
-                if (btn.type) b.classList.add(btn.type);
+                if (btn.type) {
+                    b.classList.add(btn.type);
+                }
 
                 b.addEventListener('click', () => {
-                    const result = { button: btn.value, input: popupInput.value };
+                    const result = {
+                        button: btn.value,
+                        input: popupInput.value
+                    };
                     closePopup();
                     resolve(result);
                 });
@@ -329,7 +228,9 @@ document.addEventListener('DOMContentLoaded', function () {
             title,
             message,
             showInput: false,
-            buttons: [{ text: buttonText, value: true, type: 'confirm' }]
+            buttons: [
+                { text: buttonText, value: true, type: 'confirm' }
+            ]
         });
     }
 
@@ -364,14 +265,29 @@ document.addEventListener('DOMContentLoaded', function () {
     async function showChoicePopup(title, message, choices, cancelText = 'Cancel') {
         const buttons = [];
         choices.forEach(ch => {
-            buttons.push({ text: ch.label, value: ch.value, type: 'confirm' });
+            buttons.push({
+                text: ch.label,
+                value: ch.value,
+                type: 'confirm'
+            });
         });
-        buttons.push({ text: cancelText, value: null, type: 'cancel' });
+        buttons.push({
+            text: cancelText,
+            value: null,
+            type: 'cancel'
+        });
 
-        const result = await showPopup({ title, message, showInput: false, buttons });
+        const result = await showPopup({
+            title,
+            message,
+            showInput: false,
+            buttons
+        });
+
         if (!result) return null;
         return result.button;
     }
+
     // ===== FORM POPUP FOR SINGLE-FORM EDITING =====
     async function showFormPopup(title, fields, confirmText = 'Save', cancelText = 'Cancel') {
         return new Promise(resolve => {
@@ -394,8 +310,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                 `).join('')}
                             </select>
                         ` : `
-                            <input type="${field.type}" id="popup-field-${field.name}"
-                                   value="${field.value || ''}"
+                            <input type="${field.type}" id="popup-field-${field.name}" 
+                                   value="${field.value || ''}" 
                                    style="width: 100%; padding: 8px; border-radius: 6px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text);"
                                    ${field.placeholder ? `placeholder="${field.placeholder}"` : ''}>
                         `}
@@ -408,7 +324,7 @@ document.addEventListener('DOMContentLoaded', function () {
             popupInput.classList.add('hidden');
 
             popupButtons.innerHTML = '';
-
+            
             const cancelBtn = document.createElement('button');
             cancelBtn.textContent = cancelText;
             cancelBtn.classList.add('popup-btn', 'cancel');
@@ -424,7 +340,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 const result = {};
                 fields.forEach(field => {
                     const input = document.getElementById(`popup-field-${field.name}`);
-                    result[field.name] = input ? input.value : '';
+                    result[field.name] = field.type === 'select' ? input.value : input.value;
                 });
                 closePopup();
                 resolve(result);
@@ -451,22 +367,25 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function openUserProfilePopup(userData) {
         if (!userProfilePopup) return;
-
+        
         const profile = userData.profile || {};
         const privacy = profile.privacy || {};
-
+        
+        // Respect privacy settings
         const showReputation = privacy.showReputation !== false;
         const showBets = privacy.showBets !== false;
         const showPredictions = privacy.showPredictions !== false;
 
+        // Set username in popup header
         document.getElementById('profile-popup-username').textContent = userData.username || 'User Profile';
-
+        
+        // Build profile content
         const profileContent = document.getElementById('profile-popup-content');
         profileContent.innerHTML = `
             <div class="profile-popup-avatar">
                 ${profile.picture ? `
-                    <img src="${profile.picture}"
-                         alt="${userData.username}"
+                    <img src="${profile.picture}" 
+                         alt="${userData.username}" 
                          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
                     <div class="profile-popup-avatar-placeholder" style="display: none;">
                         <i class="fas fa-user"></i>
@@ -505,7 +424,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             <div class="profile-popup-stat-label">Reputation</div>
                         </div>
                     ` : ''}
-
+                    
                     ${showBets ? `
                         <div class="profile-popup-stat">
                             <div class="profile-popup-stat-value">
@@ -514,7 +433,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             <div class="profile-popup-stat-label">Total Bets</div>
                         </div>
                     ` : ''}
-
+                    
                     ${showPredictions ? `
                         <div class="profile-popup-stat">
                             <div class="profile-popup-stat-value">
@@ -530,7 +449,41 @@ document.addEventListener('DOMContentLoaded', function () {
                     <p>This user has chosen to keep their stats private.</p>
                 </div>
             `}
+
+            <div class="profile-popup-actions" style="margin-top: 20px; display: flex; gap: 10px;">
+                ${userData.uid && userData.uid !== currentUserUid ? `
+                    <button class="btn" id="profile-chat-btn" data-user-id="${userData.uid}" data-username="${userData.username}">
+                        <i class="fas fa-comment-alt"></i> Start Chat
+                    </button>
+                    <button class="btn btn-secondary" id="profile-block-btn" data-user-id="${userData.uid}" data-username="${userData.username}">
+                        <i class="fas fa-ban"></i> Block User
+                    </button>
+                ` : ''}
+            </div>
         `;
+
+        // Add event listeners for the new buttons
+        setTimeout(() => {
+            const chatBtn = document.getElementById('profile-chat-btn');
+            const blockBtn = document.getElementById('profile-block-btn');
+            
+            if (chatBtn) {
+                chatBtn.addEventListener('click', function() {
+                    const userId = this.getAttribute('data-user-id');
+                    const username = this.getAttribute('data-username');
+                    closeUserProfilePopup();
+                    startOrOpenChat(userId, username);
+                });
+            }
+            
+            if (blockBtn) {
+                blockBtn.addEventListener('click', function() {
+                    const userId = this.getAttribute('data-user-id');
+                    const username = this.getAttribute('data-username');
+                    blockUser(userId, username);
+                });
+            }
+        }, 100);
 
         userProfilePopup.classList.remove('hidden');
         requestAnimationFrame(() => {
@@ -538,322 +491,1224 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // ===== CHAT POPUP SYSTEM =====
+    function openChatPopup() {
+        if (!chatPopup) return;
+        
+        chatPopup.classList.remove('hidden');
+        requestAnimationFrame(() => {
+            chatPopup.classList.add('active');
+            loadChatList();
+        });
+    }
+
+    function closeChatPopup() {
+        if (!chatPopup) return;
+        
+        chatPopup.classList.remove('active');
+        setTimeout(() => {
+            chatPopup.classList.add('hidden');
+            // Clear current chat
+            currentChatId = null;
+            currentChatOtherUser = null;
+            chatMessagesContainer.innerHTML = '';
+            chatHeaderUsername.textContent = 'Select a conversation';
+            chatHeaderStatus.textContent = 'Click on a conversation to start chatting';
+            chatMessageInput.value = '';
+            chatMessageInput.disabled = true;
+            sendChatMessageBtn.disabled = true;
+            viewProfileInChatBtn.style.display = 'none';
+            blockUserInChatBtn.style.display = 'none';
+            
+            // Remove chat listeners
+            Object.values(chatListeners).forEach(unsubscribe => {
+                if (unsubscribe) unsubscribe();
+            });
+            chatListeners = {};
+            
+            // Remove chat list listener
+            if (chatListListener) {
+                chatListListener();
+                chatListListener = null;
+            }
+        }, 200);
+    }
+
+    // ===== CHAT FUNCTIONS =====
+    async function startOrOpenChat(otherUserId, otherUsername) {
+        if (!currentUserUid || !otherUserId || otherUserId === currentUserUid) return;
+        
+        // Check if user is blocked
+        const isBlocked = await checkIfBlocked(otherUserId);
+        if (isBlocked) {
+            await showMessagePopup('Cannot Start Chat', 'You have blocked this user. Unblock them first to start a chat.');
+            return;
+        }
+        
+        // Check if other user has blocked us
+        const amIBlocked = await checkIfUserBlockedMe(otherUserId);
+        if (amIBlocked) {
+            await showMessagePopup('Cannot Start Chat', 'This user has blocked you. You cannot start a chat with them.');
+            return;
+        }
+        
+        // Check privacy settings
+        const otherUserAccount = await getUserAccount(otherUserId);
+        if (otherUserAccount && otherUserAccount.profile && otherUserAccount.profile.privacy) {
+            if (otherUserAccount.profile.privacy.allowChats === false) {
+                await showMessagePopup('Cannot Start Chat', 'This user has disabled chat requests.');
+                return;
+            }
+        }
+        
+        // Generate chat ID (sorted to ensure consistency)
+        const chatId = generateChatId(currentUserUid, otherUserId);
+        
+        // Open chat popup
+        openChatPopup();
+        
+        // Load or create chat
+        await loadChat(chatId, otherUserId, otherUsername);
+    }
+
+    function generateChatId(userId1, userId2) {
+        // Sort user IDs to ensure same chat ID regardless of who starts it
+        const sortedIds = [userId1, userId2].sort();
+        return `chat_${sortedIds[0]}_${sortedIds[1]}`;
+    }
+
+    async function loadChat(chatId, otherUserId, otherUsername) {
+        if (!currentUserUid) return;
+        
+        currentChatId = chatId;
+        currentChatOtherUser = {
+            uid: otherUserId,
+            username: otherUsername
+        };
+        
+        // Update chat header
+        chatHeaderUsername.textContent = otherUsername || 'User';
+        chatHeaderStatus.textContent = 'Online';
+        viewProfileInChatBtn.style.display = 'inline-block';
+        blockUserInChatBtn.style.display = 'inline-block';
+        
+        // Enable message input
+        chatMessageInput.disabled = false;
+        sendChatMessageBtn.disabled = false;
+        chatMessageInput.focus();
+        
+        // Clear existing messages
+        chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading messages...</div>';
+        
+        // Check if chat exists
+        const chatRef = ref(db, `chats/userChats/${chatId}`);
+        const chatSnap = await get(chatRef);
+        
+        if (!chatSnap.exists()) {
+            // Create new chat
+            await set(chatRef, {
+                participants: {
+                    user1: currentUserUid,
+                    user2: otherUserId
+                },
+                createdAt: new Date().toISOString(),
+                lastMessage: null,
+                lastMessageTime: null
+            });
+            
+            chatMessagesContainer.innerHTML = '<div class="chat-empty">No messages yet. Start the conversation!</div>';
+        } else {
+            // Load existing messages
+            await loadChatMessages(chatId);
+        }
+        
+        // Set up real-time listener for new messages
+        setupChatListener(chatId);
+    }
+
+    async function loadChatMessages(chatId) {
+        const messagesRef = ref(db, `chats/userChats/${chatId}/messages`);
+        const messagesSnap = await get(messagesRef);
+        
+        chatMessagesContainer.innerHTML = '';
+        
+        if (!messagesSnap.exists()) {
+            chatMessagesContainer.innerHTML = '<div class="chat-empty">No messages yet. Start the conversation!</div>';
+            return;
+        }
+        
+        const messages = [];
+        messagesSnap.forEach(childSnap => {
+            const message = childSnap.val();
+            message._id = childSnap.key;
+            messages.push(message);
+        });
+        
+        // Sort messages by timestamp
+        messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        
+        // Display messages
+        messages.forEach(message => {
+            addMessageToChat(message, false);
+        });
+        
+        // Scroll to bottom
+        setTimeout(() => {
+            chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+        }, 100);
+    }
+
+    function setupChatListener(chatId) {
+        // Remove existing listener for this chat
+        if (chatListeners[chatId]) {
+            chatListeners[chatId]();
+        }
+        
+        const messagesRef = ref(db, `chats/userChats/${chatId}/messages`);
+        
+        // Listen for new messages
+        chatListeners[chatId] = onChildAdded(messagesRef, (snapshot) => {
+            if (snapshot.exists()) {
+                const message = snapshot.val();
+                message._id = snapshot.key;
+                
+                // Check if message already displayed
+                if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
+                    addMessageToChat(message, false);
+                    
+                    // Scroll to bottom
+                    setTimeout(() => {
+                        chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+                    }, 100);
+                    
+                    // Update chat list with last message
+                    updateChatListItem(chatId, message);
+                }
+            }
+        });
+    }
+
+    function addMessageToChat(message, isNew = true) {
+        const isCurrentUser = message.senderId === currentUserUid;
+        const isBot = message.senderId === 'BOT';
+        const timestamp = new Date(message.timestamp);
+        const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        let messageHTML = '';
+        
+        if (isBot) {
+            // Bot message styling
+            messageHTML = `
+                <div class="chat-message bot-message" data-message-id="${message._id}">
+                    <div class="message-avatar">
+                        <i class="fas fa-shield-alt"></i>
+                    </div>
+                    <div class="message-content">
+                        <div class="message-header">
+                            <span class="message-sender">ogwXbet Notification System</span>
+                            <span class="message-time">${timeString}</span>
+                        </div>
+                        <div class="message-text">${message.text}</div>
+                    </div>
+                </div>
+            `;
+        } else if (isCurrentUser) {
+            // Current user's message (right side)
+            messageHTML = `
+                <div class="chat-message user-message" data-message-id="${message._id}">
+                    <div class="message-content">
+                        <div class="message-time-right">${timeString}</div>
+                        <div class="message-text">${message.text}</div>
+                    </div>
+                </div>
+            `;
+        } else {
+            // Other user's message (left side)
+            messageHTML = `
+                <div class="chat-message other-message" data-message-id="${message._id}">
+                    <div class="message-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="message-content">
+                        <div class="message-header">
+                            <span class="message-sender">${currentChatOtherUser?.username || 'User'}</span>
+                            <span class="message-time">${timeString}</span>
+                        </div>
+                        <div class="message-text">${message.text}</div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        if (isNew) {
+            chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
+        } else {
+            // Check if message already exists
+            if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
+                chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
+            }
+        }
+    }
+
+    async function sendMessage() {
+        if (!currentChatId || !currentUserUid || !currentChatOtherUser) return;
+        
+        const messageText = chatMessageInput.value.trim();
+        if (!messageText) return;
+        
+        // Check if blocked
+        const isBlocked = await checkIfBlocked(currentChatOtherUser.uid);
+        if (isBlocked) {
+            await showMessagePopup('Cannot Send Message', 'You have blocked this user. Unblock them first to send messages.');
+            return;
+        }
+        
+        const amIBlocked = await checkIfUserBlockedMe(currentChatOtherUser.uid);
+        if (amIBlocked) {
+            await showMessagePopup('Cannot Send Message', 'This user has blocked you. You cannot send messages to them.');
+            return;
+        }
+        
+        // Create message object
+        const message = {
+            text: messageText,
+            senderId: currentUserUid,
+            timestamp: new Date().toISOString(),
+            read: false
+        };
+        
+        // Add to Firebase
+        const messagesRef = ref(db, `chats/userChats/${currentChatId}/messages`);
+        const newMessageRef = push(messagesRef);
+        
+        try {
+            await set(newMessageRef, message);
+            
+            // Update chat last message
+            const chatRef = ref(db, `chats/userChats/${currentChatId}`);
+            await update(chatRef, {
+                lastMessage: messageText,
+                lastMessageTime: new Date().toISOString(),
+                lastMessageSender: currentUserUid
+            });
+            
+            // Clear input
+            chatMessageInput.value = '';
+            chatMessageInput.focus();
+            
+        } catch (error) {
+            console.error('Failed to send message:', error);
+            await showMessagePopup('Error', 'Failed to send message. Please try again.');
+        }
+    }
+
+    async function loadChatList() {
+        if (!currentUserUid) return;
+        
+        chatListContainer.innerHTML = '<div class="chat-list-loading">Loading conversations...</div>';
+        
+        // Get all chats where current user is a participant
+        const userChatsRef = ref(db, 'chats/userChats');
+        const chatsSnap = await get(userChatsRef);
+        
+        if (!chatsSnap.exists()) {
+            chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations yet</div>';
+            return;
+        }
+        
+        const chats = [];
+        chatsSnap.forEach(childSnap => {
+            const chat = childSnap.val();
+            const chatId = childSnap.key;
+            
+            // Check if current user is a participant
+            if (chat.participants && 
+                (chat.participants.user1 === currentUserUid || chat.participants.user2 === currentUserUid)) {
+                
+                const otherUserId = chat.participants.user1 === currentUserUid ? 
+                    chat.participants.user2 : chat.participants.user1;
+                
+                chats.push({
+                    id: chatId,
+                    otherUserId: otherUserId,
+                    lastMessage: chat.lastMessage || '',
+                    lastMessageTime: chat.lastMessageTime || chat.createdAt,
+                    lastMessageSender: chat.lastMessageSender
+                });
+            }
+        });
+        
+        // Sort by last message time (newest first)
+        chats.sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+        
+        // Get user info for each chat
+        const chatItems = await Promise.all(chats.map(async (chat) => {
+            // Skip if blocked
+            const isBlocked = await checkIfBlocked(chat.otherUserId);
+            if (isBlocked) return null;
+            
+            const userAccount = await getUserAccount(chat.otherUserId);
+            if (!userAccount) return null;
+            
+            return {
+                ...chat,
+                otherUsername: userAccount.username,
+                profile: userAccount.profile || {}
+            };
+        }));
+        
+        // Filter out null (blocked users)
+        const filteredChats = chatItems.filter(chat => chat !== null);
+        
+        if (filteredChats.length === 0) {
+            chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations yet</div>';
+            return;
+        }
+        
+        // Display chat list
+        let html = '';
+        filteredChats.forEach(chat => {
+            const lastMessageTime = chat.lastMessageTime ? 
+                formatMessageTime(new Date(chat.lastMessageTime)) : 'Just now';
+            const isLastMessageFromMe = chat.lastMessageSender === currentUserUid;
+            const lastMessagePreview = chat.lastMessage ? 
+                (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet';
+            
+            // Truncate long messages
+            const truncatedMessage = lastMessagePreview.length > 30 ? 
+                lastMessagePreview.substring(0, 30) + '...' : lastMessagePreview;
+            
+            html += `
+                <div class="chat-list-item" data-chat-id="${chat.id}" data-user-id="${chat.otherUserId}" data-username="${chat.otherUsername}">
+                    <div class="chat-item-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="chat-item-info">
+                        <div class="chat-item-username">${chat.otherUsername}</div>
+                        <div class="chat-item-preview">${truncatedMessage}</div>
+                    </div>
+                    <div class="chat-item-time">${lastMessageTime}</div>
+                </div>
+            `;
+        });
+        
+        chatListContainer.innerHTML = html;
+        
+        // Add click listeners
+        document.querySelectorAll('.chat-list-item').forEach(item => {
+            item.addEventListener('click', function() {
+                const chatId = this.getAttribute('data-chat-id');
+                const userId = this.getAttribute('data-user-id');
+                const username = this.getAttribute('data-username');
+                
+                // Remove active class from all items
+                document.querySelectorAll('.chat-list-item').forEach(i => {
+                    i.classList.remove('active');
+                });
+                
+                // Add active class to clicked item
+                this.classList.add('active');
+                
+                // Load the chat
+                loadChat(chatId, userId, username);
+            });
+        });
+        
+        // Set up real-time listener for chat list updates
+        setupChatListListener();
+    }
+
+    function setupChatListListener() {
+        // Remove existing listener
+        if (chatListListener) {
+            chatListListener();
+        }
+        
+        const userChatsRef = ref(db, 'chats/userChats');
+        chatListListener = onChildAdded(userChatsRef, async (snapshot) => {
+            if (!snapshot.exists()) return;
+            
+            const chat = snapshot.val();
+            const chatId = snapshot.key;
+            
+            // Check if current user is a participant
+            if (chat.participants && 
+                (chat.participants.user1 === currentUserUid || chat.participants.user2 === currentUserUid)) {
+                
+                const otherUserId = chat.participants.user1 === currentUserUid ? 
+                    chat.participants.user2 : chat.participants.user1;
+                
+                // Check if already in list
+                if (document.querySelector(`[data-chat-id="${chatId}"]`)) return;
+                
+                // Check if blocked
+                const isBlocked = await checkIfBlocked(otherUserId);
+                if (isBlocked) return;
+                
+                // Get user info
+                const userAccount = await getUserAccount(otherUserId);
+                if (!userAccount) return;
+                
+                // Add to chat list
+                addChatToList(chatId, otherUserId, userAccount.username, chat);
+            }
+        });
+    }
+
+    function addChatToList(chatId, otherUserId, username, chat) {
+        const lastMessageTime = chat.lastMessageTime ? 
+            formatMessageTime(new Date(chat.lastMessageTime)) : 'Just now';
+        const isLastMessageFromMe = chat.lastMessageSender === currentUserUid;
+        const lastMessagePreview = chat.lastMessage ? 
+            (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet';
+        
+        const truncatedMessage = lastMessagePreview.length > 30 ? 
+            lastMessagePreview.substring(0, 30) + '...' : lastMessagePreview;
+        
+        const chatItemHTML = `
+            <div class="chat-list-item" data-chat-id="${chatId}" data-user-id="${otherUserId}" data-username="${username}">
+                <div class="chat-item-avatar">
+                    <i class="fas fa-user"></i>
+                </div>
+                <div class="chat-item-info">
+                    <div class="chat-item-username">${username}</div>
+                    <div class="chat-item-preview">${truncatedMessage}</div>
+                </div>
+                <div class="chat-item-time">${lastMessageTime}</div>
+            </div>
+        `;
+        
+        // Remove empty state if present
+        const emptyState = chatListContainer.querySelector('.chat-list-empty');
+        if (emptyState) {
+            emptyState.remove();
+        }
+        
+        // Remove loading state if present
+        const loadingState = chatListContainer.querySelector('.chat-list-loading');
+        if (loadingState) {
+            loadingState.remove();
+        }
+        
+        // Add to top of list
+        chatListContainer.insertAdjacentHTML('afterbegin', chatItemHTML);
+        
+        // Add click listener to new item
+        const newItem = chatListContainer.querySelector(`[data-chat-id="${chatId}"]`);
+        newItem.addEventListener('click', function() {
+            const chatId = this.getAttribute('data-chat-id');
+            const userId = this.getAttribute('data-user-id');
+            const username = this.getAttribute('data-username');
+            
+            document.querySelectorAll('.chat-list-item').forEach(i => {
+                i.classList.remove('active');
+            });
+            this.classList.add('active');
+            loadChat(chatId, userId, username);
+        });
+    }
+
+    function updateChatListItem(chatId, message) {
+        const chatItem = document.querySelector(`[data-chat-id="${chatId}"]`);
+        if (!chatItem) return;
+        
+        const timeElement = chatItem.querySelector('.chat-item-time');
+        const previewElement = chatItem.querySelector('.chat-item-preview');
+        
+        if (timeElement) {
+            timeElement.textContent = formatMessageTime(new Date(message.timestamp));
+        }
+        
+        if (previewElement) {
+            const isFromMe = message.senderId === currentUserUid;
+            const preview = isFromMe ? `You: ${message.text}` : message.text;
+            const truncated = preview.length > 30 ? preview.substring(0, 30) + '...' : preview;
+            previewElement.textContent = truncated;
+        }
+        
+        // Move to top
+        chatListContainer.prepend(chatItem);
+    }
+
+    function formatMessageTime(date) {
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        
+        return date.toLocaleDateString();
+    }
+
+    // ===== BLOCKING SYSTEM =====
+    async function blockUser(userId, username) {
+        if (!currentUserUid || !userId || userId === currentUserUid) return;
+        
+        const confirmBlock = await showConfirmPopup(
+            'Block User',
+            `Are you sure you want to block ${username}? This will:
+            - Remove your chat with them
+            - Hide you from their searches
+            - Prevent them from starting new chats with you`,
+            'Block',
+            'Cancel'
+        );
+        
+        if (!confirmBlock) return;
+        
+        try {
+            // Add to blocked list
+            const blockRef = ref(db, `blocks/${currentUserUid}/blockedUsers/${userId}`);
+            await set(blockRef, true);
+            
+            // Delete chat if exists
+            const chatId = generateChatId(currentUserUid, userId);
+            const chatRef = ref(db, `chats/userChats/${chatId}`);
+            await remove(chatRef);
+            
+            // If currently viewing this chat, close it
+            if (currentChatOtherUser && currentChatOtherUser.uid === userId) {
+                chatMessagesContainer.innerHTML = '<div class="chat-empty">User blocked. Chat removed.</div>';
+                chatHeaderUsername.textContent = 'Select a conversation';
+                chatHeaderStatus.textContent = 'Click on a conversation to start chatting';
+                chatMessageInput.disabled = true;
+                sendChatMessageBtn.disabled = true;
+                viewProfileInChatBtn.style.display = 'none';
+                blockUserInChatBtn.style.display = 'none';
+                currentChatId = null;
+                currentChatOtherUser = null;
+            }
+            
+            // Remove from chat list
+            const chatItem = document.querySelector(`[data-user-id="${userId}"]`);
+            if (chatItem) {
+                chatItem.remove();
+            }
+            
+            // Show success
+            await showMessagePopup('User Blocked', `${username} has been blocked.`);
+            
+        } catch (error) {
+            console.error('Failed to block user:', error);
+            await showMessagePopup('Error', 'Failed to block user. Please try again.');
+        }
+    }
+
+    async function unblockUser(userId, username) {
+        if (!currentUserUid || !userId) return;
+        
+        const confirmUnblock = await showConfirmPopup(
+            'Unblock User',
+            `Are you sure you want to unblock ${username}? This will allow them to:
+            - See you in searches
+            - Start chats with you (if you allow chats)`,
+            'Unblock',
+            'Cancel'
+        );
+        
+        if (!confirmUnblock) return;
+        
+        try {
+            const blockRef = ref(db, `blocks/${currentUserUid}/blockedUsers/${userId}`);
+            await remove(blockRef);
+            
+            await showMessagePopup('User Unblocked', `${username} has been unblocked.`);
+            
+        } catch (error) {
+            console.error('Failed to unblock user:', error);
+            await showMessagePopup('Error', 'Failed to unblock user. Please try again.');
+        }
+    }
+
+    async function checkIfBlocked(userId) {
+        if (!currentUserUid || !userId) return false;
+        
+        try {
+            const blockRef = ref(db, `blocks/${currentUserUid}/blockedUsers/${userId}`);
+            const snap = await get(blockRef);
+            return snap.exists();
+        } catch (error) {
+            console.error('Error checking block status:', error);
+            return false;
+        }
+    }
+
+    async function checkIfUserBlockedMe(userId) {
+        if (!currentUserUid || !userId) return false;
+        
+        try {
+            const blockRef = ref(db, `blocks/${userId}/blockedUsers/${currentUserUid}`);
+            const snap = await get(blockRef);
+            return snap.exists();
+        } catch (error) {
+            console.error('Error checking if user blocked me:', error);
+            return false;
+        }
+    }
+
+    async function getUserAccount(userId) {
+        try {
+            const accountRef = ref(db, `accounts/${userId}`);
+            const snap = await get(accountRef);
+            if (snap.exists()) {
+                const account = snap.val();
+                account.uid = userId;
+                return account;
+            }
+            return null;
+        } catch (error) {
+            console.error('Error getting user account:', error);
+            return null;
+        }
+    }
+
+    // ===== ADMIN BROADCAST SYSTEM =====
+    async function sendBroadcastMessage() {
+        if (!isCurrentUserModerator()) return;
+        
+        const message = broadcastMessageInput.value.trim();
+        if (!message) {
+            await showMessagePopup('Error', 'Please enter a message to broadcast.');
+            return;
+        }
+        
+        const confirmSend = await showConfirmPopup(
+            'Send Broadcast',
+            `Are you sure you want to send this message to ALL users?
+            
+            "${message}"
+            
+            This cannot be undone.`,
+            'Send to All',
+            'Cancel'
+        );
+        
+        if (!confirmSend) return;
+        
+        try {
+            const broadcastMessage = {
+                text: message,
+                senderId: 'BOT',
+                timestamp: new Date().toISOString(),
+                isBroadcast: true
+            };
+            
+            const announcementsRef = ref(db, 'chats/announcements/messages');
+            await push(announcementsRef, broadcastMessage);
+            
+            broadcastMessageInput.value = '';
+            await showMessagePopup('Broadcast Sent', 'Message sent to all users successfully!');
+            
+        } catch (error) {
+            console.error('Failed to send broadcast:', error);
+            await showMessagePopup('Error', 'Failed to send broadcast. Please try again.');
+        }
+    }
+
+    async function loadAnnouncements() {
+        if (!currentUserUid) return;
+        
+        const announcementsRef = ref(db, 'chats/announcements/messages');
+        const snap = await get(announcementsRef);
+        
+        if (!snap.exists()) return;
+        
+        // Check if we have an announcements chat in our list
+        let hasAnnouncements = false;
+        const chatItems = document.querySelectorAll('.chat-list-item');
+        chatItems.forEach(item => {
+            if (item.getAttribute('data-user-id') === 'BOT') {
+                hasAnnouncements = true;
+            }
+        });
+        
+        if (!hasAnnouncements) {
+            // Add announcements to chat list
+            const announcementItemHTML = `
+                <div class="chat-list-item announcements-item" data-chat-id="announcements" data-user-id="BOT" data-username="ogwXbet Notification System">
+                    <div class="chat-item-avatar">
+                        <i class="fas fa-shield-alt"></i>
+                    </div>
+                    <div class="chat-item-info">
+                        <div class="chat-item-username">ogwXbet Notification System</div>
+                        <div class="chat-item-preview">System announcements and updates</div>
+                    </div>
+                </div>
+            `;
+            
+            // Remove empty state if present
+            const emptyState = chatListContainer.querySelector('.chat-list-empty');
+            if (emptyState) {
+                emptyState.remove();
+            }
+            
+            // Remove loading state if present
+            const loadingState = chatListContainer.querySelector('.chat-list-loading');
+            if (loadingState) {
+                loadingState.remove();
+            }
+            
+            chatListContainer.insertAdjacentHTML('afterbegin', announcementItemHTML);
+            
+            // Add click listener
+            const announcementItem = chatListContainer.querySelector('.announcements-item');
+            announcementItem.addEventListener('click', function() {
+                loadAnnouncementsChat();
+            });
+        }
+    }
+
+    async function loadAnnouncementsChat() {
+        currentChatId = 'announcements';
+        currentChatOtherUser = {
+            uid: 'BOT',
+            username: 'ogwXbet Notification System'
+        };
+        
+        chatHeaderUsername.textContent = 'ogwXbet Notification System';
+        chatHeaderStatus.textContent = 'System Bot';
+        viewProfileInChatBtn.style.display = 'none';
+        blockUserInChatBtn.style.display = 'none';
+        
+        // Disable message input for bot
+        chatMessageInput.disabled = true;
+        sendChatMessageBtn.disabled = true;
+        chatMessageInput.placeholder = 'You cannot reply to system messages';
+        
+        // Clear messages
+        chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading announcements...</div>';
+        
+        // Load announcements
+        const announcementsRef = ref(db, 'chats/announcements/messages');
+        const snap = await get(announcementsRef);
+        
+        chatMessagesContainer.innerHTML = '';
+        
+        if (!snap.exists()) {
+            chatMessagesContainer.innerHTML = '<div class="chat-empty">No announcements yet.</div>';
+            return;
+        }
+        
+        const announcements = [];
+        snap.forEach(childSnap => {
+            const message = childSnap.val();
+            message._id = childSnap.key;
+            announcements.push(message);
+        });
+        
+        // Sort by timestamp (newest first for announcements)
+        announcements.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        
+        // Display announcements
+        announcements.forEach(message => {
+            addMessageToChat(message, false);
+        });
+        
+        // Set up listener for new announcements
+        setupAnnouncementsListener();
+    }
+
+    function setupAnnouncementsListener() {
+        // Remove existing announcement listener
+        if (chatListeners['announcements']) {
+            chatListeners['announcements']();
+        }
+        
+        const announcementsRef = ref(db, 'chats/announcements/messages');
+        
+        chatListeners['announcements'] = onChildAdded(announcementsRef, (snapshot) => {
+            if (snapshot.exists() && currentChatId === 'announcements') {
+                const message = snapshot.val();
+                message._id = snapshot.key;
+                
+                if (!document.querySelector(`[data-message-id="${message._id}"]`)) {
+                    addMessageToChat(message, false);
+                }
+            }
+        });
+    }
+
     // ===============================
+    // EXISTING FUNCTIONS (UPDATED FOR CHAT INTEGRATION)
 
     checkLoginStatus();
 
-    if (showRegisterBtn) {
-        showRegisterBtn.addEventListener('click', function () {
-            loginSection.classList.add('hidden');
-            accountCreationSection.classList.remove('hidden');
-        });
+    showRegisterBtn.addEventListener('click', function () {
+        loginSection.classList.add('hidden');
+        accountCreationSection.classList.remove('hidden');
+    });
+
+    showLoginBtn.addEventListener('click', function () {
+        accountCreationSection.classList.add('hidden');
+        loginSection.classList.remove('hidden');
+    });
+
+    toggleTokenBtn.addEventListener('click', function () {
+        const tokenInput = document.getElementById('login-token');
+        const icon = this.querySelector('i');
+        if (tokenInput.type === 'password') {
+            tokenInput.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            tokenInput.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    });
+
+    // ===== EVENT LISTENERS =====
+    if (updatePictureBtn) {
+        updatePictureBtn.addEventListener('click', updateProfilePicture);
     }
 
-    if (showLoginBtn) {
-        showLoginBtn.addEventListener('click', function () {
-            accountCreationSection.classList.add('hidden');
-            loginSection.classList.remove('hidden');
-        });
+    if (saveProfileBtn) {
+        saveProfileBtn.addEventListener('click', saveProfileSettings);
     }
 
-    if (toggleTokenBtn) {
-        toggleTokenBtn.addEventListener('click', function () {
-            const tokenInput = document.getElementById('login-token');
-            const icon = this.querySelector('i');
-            if (!tokenInput || !icon) return;
+    if (searchUserBtn) {
+        searchUserBtn.addEventListener('click', searchUsers);
+    }
 
-            if (tokenInput.type === 'password') {
-                tokenInput.type = 'text';
-                icon.classList.remove('fa-eye');
-                icon.classList.add('fa-eye-slash');
-            } else {
-                tokenInput.type = 'password';
-                icon.classList.remove('fa-eye-slash');
-                icon.classList.add('fa-eye');
+    if (refreshPredictionsBtn) {
+        refreshPredictionsBtn.addEventListener('click', refreshAccountData);
+    }
+
+    if (closeProfilePopup) {
+        closeProfilePopup.addEventListener('click', closeUserProfilePopup);
+    }
+
+    // CHAT EVENT LISTENERS
+    if (openChatBtn) {
+        openChatBtn.addEventListener('click', openChatPopup);
+    }
+
+    if (closeChatBtn) {
+        closeChatBtn.addEventListener('click', closeChatPopup);
+    }
+
+    if (sendChatMessageBtn) {
+        sendChatMessageBtn.addEventListener('click', sendMessage);
+    }
+
+    if (chatMessageInput) {
+        chatMessageInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
             }
         });
     }
 
-    // ===== PHASE 1: NEW EVENT LISTENERS =====
-    if (updatePictureBtn) updatePictureBtn.addEventListener('click', updateProfilePicture);
-    if (saveProfileBtn) saveProfileBtn.addEventListener('click', saveProfileSettings);
-    if (searchUserBtn) searchUserBtn.addEventListener('click', searchUsers);
-    if (refreshPredictionsBtn) refreshPredictionsBtn.addEventListener('click', refreshAccountData);
-    if (closeProfilePopup) closeProfilePopup.addEventListener('click', closeUserProfilePopup);
+    if (viewProfileInChatBtn) {
+        viewProfileInChatBtn.addEventListener('click', function () {
+            if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
+                closeChatPopup();
+                openUserProfilePopup({
+                    uid: currentChatOtherUser.uid,
+                    username: currentChatOtherUser.username
+                });
+            }
+        });
+    }
 
+    if (blockUserInChatBtn) {
+        blockUserInChatBtn.addEventListener('click', function () {
+            if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
+                blockUser(currentChatOtherUser.uid, currentChatOtherUser.username);
+            }
+        });
+    }
+
+    if (adminBroadcastBtn) {
+        adminBroadcastBtn.addEventListener('click', function () {
+            if (isCurrentUserModerator()) {
+                document.getElementById('broadcast-section').classList.toggle('hidden');
+            }
+        });
+    }
+
+    if (sendBroadcastBtn) {
+        sendBroadcastBtn.addEventListener('click', sendBroadcastMessage);
+    }
+
+    // Close chat popup when clicking outside
+    if (chatPopup) {
+        chatPopup.addEventListener('click', function (e) {
+            if (e.target === chatPopup) {
+                closeChatPopup();
+            }
+        });
+    }
+
+    // Close profile popup when clicking outside
     if (userProfilePopup) {
         userProfilePopup.addEventListener('click', function (e) {
-            if (e.target === userProfilePopup) closeUserProfilePopup();
-        });
-    }
-
-    // ===== ACCOUNT CREATION (UPDATED WITH USERSEARCH SYNC) =====
-    if (createAccountBtn) {
-        createAccountBtn.addEventListener('click', async function () {
-            const username = document.getElementById('username').value.trim();
-            const webhook = document.getElementById('webhook').value.trim();
-
-            if (!username) {
-                showStatus('Please enter a username', 'error');
-                return;
-            }
-            if (!webhook) {
-                showStatus('Please enter a Discord webhook URL', 'error');
-                return;
-            }
-            if (!webhook.startsWith('https://discord.com/api/webhooks/')) {
-                showStatus('Please enter a valid Discord webhook URL', 'error');
-                return;
-            }
-
-            const email = `${username}@ogwxbet.local`;
-            const token = generateToken();
-
-            try {
-                const userCredential = await createUserWithEmailAndPassword(auth, email, token);
-                const uid = userCredential.user.uid;
-
-                const accountProfile = {
-                    username: username,
-                    webhook: webhook,
-                    creationDate: new Date().toISOString(),
-                    bets: [],
-                    predictions: [],
-                    reputation: 0,
-                    isModerator: username === 'Whitte4',
-                    deleted: false,
-                    deletedAt: null,
-                    deletedBy: null,
-                    profile: {
-                        picture: "",
-                        bio: "",
-                        privacy: {
-                            showReputation: true,
-                            showBets: true,
-                            showPredictions: true,
-                            showChats: true
-                        }
-                    }
-                };
-
-                await set(ref(db, `accounts/${uid}`), accountProfile);
-
-                await set(ref(db, `userSearch/${uid}`), {
-                    username: username,
-                    creationDate: accountProfile.creationDate,
-                    profile: accountProfile.profile
-                });
-
-                const payload = {
-                    content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${token}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**`
-                };
-                const response = await fetch(webhook, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response.ok) {
-                    showStatus('Account created, but failed to send token to Discord. Check your webhook.', 'error');
-                } else {
-                    showStatus('Account created successfully! Token sent to your Discord.', 'success');
-                }
-
-                try { await signOut(auth); } catch (e) {}
-
-                accountCreationSection.classList.add('hidden');
-                loginSection.classList.remove('hidden');
-                document.getElementById('login-username').value = username;
-                document.getElementById('username').value = '';
-                document.getElementById('webhook').value = '';
-
-            } catch (error) {
-                console.error('Create account error:', error);
-                if (error.code === 'auth/email-already-in-use') {
-                    showStatus('Username already taken. Please choose a different one.', 'error');
-                } else {
-                    showStatus('Failed to create account. Please try again later.', 'error');
-                }
-            }
-        });
-    }
-    // ===== LOGIN =====
-    if (loginBtn) {
-        loginBtn.addEventListener('click', async function () {
-            const username = document.getElementById('login-username').value.trim();
-            const token = document.getElementById('login-token').value.trim();
-
-            if (!username || !token) {
-                if (loginStatus) {
-                    loginStatus.textContent = 'Please enter both username and token';
-                    loginStatus.className = 'status error';
-                }
-                return;
-            }
-
-            const email = `${username}@ogwxbet.local`;
-
-            try {
-                await signInWithEmailAndPassword(auth, email, token);
-                if (loginStatus) {
-                    loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
-                    loginStatus.className = 'status success';
-                }
-            } catch (error) {
-                console.error('Login error:', error);
-                if (loginStatus) {
-                    loginStatus.textContent = 'Invalid username or token. Please try again.';
-                    loginStatus.className = 'status error';
-                }
+            if (e.target === userProfilePopup) {
+                closeUserProfilePopup();
             }
         });
     }
 
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', async function () {
-            try { await signOut(auth); } catch (e) { console.error('Logout error:', e); }
+    // ===== ACCOUNT CREATION (UPDATED WITH CHAT PRIVACY) =====
+    createAccountBtn.addEventListener('click', async function () {
+        const username = document.getElementById('username').value.trim();
+        const webhook = document.getElementById('webhook').value.trim();
 
-            sessionStorage.removeItem('ogwXbet_currentUser');
-            sessionStorage.removeItem('ogwXbet_loginTime');
-            currentUserUid = null;
-            currentAccount = null;
+        if (!username) {
+            showStatus('Please enter a username', 'error');
+            return;
+        }
+        if (!webhook) {
+            showStatus('Please enter a Discord webhook URL', 'error');
+            return;
+        }
+        if (!webhook.startsWith('https://discord.com/api/webhooks/')) {
+            showStatus('Please enter a valid Discord webhook URL', 'error');
+            return;
+        }
 
-            // IMPORTANT: also force-hide chat overlay on logout
-            forceHideChatOverlay();
+        const email = `${username}@ogwxbet.local`;
+        const token = generateToken();
 
-            showLoginPage();
-        });
-    }
+        try {
+            // Create auth user
+            const userCredential = await createUserWithEmailAndPassword(auth, email, token);
+            const uid = userCredential.user.uid;
 
-    // ===== TOKEN REGENERATION =====
-    if (changeTokenBtn) {
-        changeTokenBtn.addEventListener('click', async function () {
-            if (!currentAccount || !currentUserUid) return;
-            const user = auth.currentUser;
-            if (!user) return;
-
-            if (tokenStatus) {
-                tokenStatus.textContent = '';
-                tokenStatus.className = 'status';
-            }
-
-            const choice = await showChoicePopup(
-                'Generate New Token',
-                'How do you want to receive your new login token?',
-                [
-                    { label: 'Use account creation webhook', value: 'original' },
-                    { label: 'Enter new webhook', value: 'new' }
-                ]
-            );
-
-            if (!choice) {
-                if (tokenStatus) {
-                    tokenStatus.textContent = 'Token generation cancelled.';
-                    tokenStatus.className = 'status info';
-                }
-                return;
-            }
-
-            let targetWebhook = currentAccount.webhook;
-
-            if (choice === 'new') {
-                const newWebhook = await showInputPopup(
-                    'New Webhook',
-                    'Enter new Discord webhook URL:',
-                    'https://discord.com/api/webhooks/...'
-                );
-                if (!newWebhook) return;
-
-                if (!newWebhook.startsWith('https://discord.com/api/webhooks/')) {
-                    if (tokenStatus) {
-                        tokenStatus.textContent = 'Invalid webhook URL.';
-                        tokenStatus.className = 'status error';
-                    }
-                    return;
-                }
-                targetWebhook = newWebhook;
-                currentAccount.webhook = newWebhook;
-            }
-
-            const newToken = generateToken();
-
-            try {
-                await updatePassword(user, newToken);
-                await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
-
-                const payload = {
-                    content: `**New Login Token Generated**\n\nUsername: ${currentAccount.username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**Old token is no longer valid.**`
-                };
-                const response = await fetch(targetWebhook, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (tokenStatus) {
-                    if (response.ok) {
-                        tokenStatus.textContent = 'New token generated and sent to Discord.';
-                        tokenStatus.className = 'status success';
-                    } else {
-                        tokenStatus.textContent = 'Token updated, but sending to Discord failed.';
-                        tokenStatus.className = 'status error';
+            // Store profile in Realtime Database (WITH CHAT PRIVACY)
+            const accountProfile = {
+                username: username,
+                webhook: webhook,
+                creationDate: new Date().toISOString(),
+                bets: [],
+                predictions: [],
+                reputation: 0,
+                isModerator: username === 'Whitte4',
+                deleted: false,
+                deletedAt: null,
+                deletedBy: null,
+                profile: {
+                    picture: "",
+                    bio: "",
+                    privacy: {
+                        showReputation: true,
+                        showBets: true,
+                        showPredictions: true,
+                        allowChats: true  // NEW: Chat privacy setting
                     }
                 }
-            } catch (err) {
-                console.error('Token regen error:', err);
-                if (tokenStatus) {
-                    tokenStatus.textContent = 'Failed to update token. Try re-logging and retry.';
-                    tokenStatus.className = 'status error';
-                }
-            }
-        });
-    }
-
-    // ===== EVENT CREATION =====
-    if (addEventBtn) {
-        addEventBtn.addEventListener('click', function () {
-            const title = document.getElementById('event-title').value.trim();
-            const teamA = document.getElementById('team-a').value.trim();
-            const teamB = document.getElementById('team-b').value.trim();
-            const date = document.getElementById('event-date').value;
-            const category = document.getElementById('event-category').value;
-
-            if (!title || !teamA || !teamB || !date) {
-                document.getElementById('event-status').textContent = 'Please fill in all fields';
-                document.getElementById('event-status').className = 'status error';
-                return;
-            }
-
-            const newEvent = {
-                id: Date.now().toString(),
-                title: title,
-                teamA: teamA,
-                teamB: teamB,
-                date: date,
-                category: category,
-                oddsA: 2.10,
-                oddsDraw: 3.25,
-                oddsB: 2.80,
-                createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
             };
 
-            if (window.saveEventToFirebase) window.saveEventToFirebase(newEvent);
+            await set(ref(db, `accounts/${uid}`), accountProfile);
 
-            document.getElementById('event-status').textContent = 'Event added successfully!';
-            document.getElementById('event-status').className = 'status success';
+            // Create user search data
+            await set(ref(db, `userSearch/${uid}`), {
+                username: username,
+                creationDate: accountProfile.creationDate,
+                profile: accountProfile.profile
+            });
 
-            document.getElementById('event-title').value = '';
-            document.getElementById('team-a').value = '';
-            document.getElementById('team-b').value = '';
-            document.getElementById('event-date').value = '';
+            // Send token to Discord
+            const payload = {
+                content: `**Account Created**\n\nUsername: ${username}\nLogin Token:\n\`\`\`\n${token}\n\`\`\`\n\n**DO NOT SHARE YOUR LOGIN TOKEN AND SAVE IT**`
+            };
+            const response = await fetch(webhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
 
-            setTimeout(() => {
-                document.getElementById('event-status').className = 'status';
-            }, 3000);
-        });
-    }
+            if (!response.ok) {
+                showStatus('Account created, but failed to send token to Discord. Check your webhook.', 'error');
+            } else {
+                showStatus('Account created successfully! Token sent to your Discord.', 'success');
+            }
 
-    // ===== CLEAR EVENT LOG =====
+            // Sign out after creation
+            try {
+                await signOut(auth);
+            } catch (e) {
+                console.error('Sign-out after creation failed:', e);
+            }
+
+            accountCreationSection.classList.add('hidden');
+            loginSection.classList.remove('hidden');
+            document.getElementById('login-username').value = username;
+            document.getElementById('username').value = '';
+            document.getElementById('webhook').value = '';
+
+        } catch (error) {
+            console.error('Create account error:', error);
+            if (error.code === 'auth/email-already-in-use') {
+                showStatus('Username already taken. Please choose a different one.', 'error');
+            } else {
+                showStatus('Failed to create account. Please try again later.', 'error');
+            }
+        }
+    });
+
+    // ===== LOGIN =====
+    loginBtn.addEventListener('click', async function () {
+        const username = document.getElementById('login-username').value.trim();
+        const token = document.getElementById('login-token').value.trim();
+
+        if (!username || !token) {
+            loginStatus.textContent = 'Please enter both username and token';
+            loginStatus.className = 'status error';
+            return;
+        }
+
+        const email = `${username}@ogwxbet.local`;
+
+        try {
+            await signInWithEmailAndPassword(auth, email, token);
+            loginStatus.textContent = 'Login successful! Redirecting to dashboard...';
+            loginStatus.className = 'status success';
+        } catch (error) {
+            console.error('Login error:', error);
+            loginStatus.textContent = 'Invalid username or token. Please try again.';
+            loginStatus.className = 'status error';
+        }
+    });
+
+    logoutBtn.addEventListener('click', async function () {
+        try {
+            await signOut(auth);
+        } catch (e) {
+            console.error('Logout error:', e);
+        }
+        sessionStorage.removeItem('ogwXbet_currentUser');
+        sessionStorage.removeItem('ogwXbet_loginTime');
+        currentUserUid = null;
+        currentAccount = null;
+        showLoginPage();
+    });
+
+    // ===== TOKEN REGENERATION =====
+    changeTokenBtn.addEventListener('click', async function () {
+        if (!currentAccount || !currentUserUid) return;
+        const user = auth.currentUser;
+        if (!user) return;
+
+        tokenStatus.textContent = '';
+        tokenStatus.className = 'status';
+
+        const choice = await showChoicePopup(
+            'Generate New Token',
+            'How do you want to receive your new login token?',
+            [
+                { label: 'Use account creation webhook', value: 'original' },
+                { label: 'Enter new webhook', value: 'new' }
+            ]
+        );
+
+        if (!choice) {
+            tokenStatus.textContent = 'Token generation cancelled.';
+            tokenStatus.className = 'status info';
+            return;
+        }
+
+        let targetWebhook = currentAccount.webhook;
+
+        if (choice === 'new') {
+            const newWebhook = await showInputPopup(
+                'New Webhook',
+                'Enter new Discord webhook URL:',
+                'https://discord.com/api/webhooks/...'
+            );
+            if (!newWebhook) {
+                tokenStatus.textContent = 'Token generation cancelled.';
+                tokenStatus.className = 'status info';
+                return;
+            }
+            if (!newWebhook.startsWith('https://discord.com/api/webhooks/')) {
+                tokenStatus.textContent = 'Invalid webhook URL.';
+                tokenStatus.className = 'status error';
+                return;
+            }
+            targetWebhook = newWebhook;
+            currentAccount.webhook = newWebhook;
+        }
+
+        const newToken = generateToken();
+
+        try {
+            await updatePassword(user, newToken);
+            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+
+            const payload = {
+                content: `**New Login Token Generated**\n\nUsername: ${currentAccount.username}\nNew Login Token:\n\`\`\`\n${newToken}\n\`\`\`\n\n**Old token is no longer valid.**`
+            };
+            const response = await fetch(targetWebhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                tokenStatus.textContent = 'New token generated and sent to Discord.';
+                tokenStatus.className = 'status success';
+            } else {
+                tokenStatus.textContent = 'Token updated, but sending to Discord failed.';
+                tokenStatus.className = 'status error';
+            }
+        } catch (err) {
+            console.error('Token regen error:', err);
+            tokenStatus.textContent = 'Failed to update token. Try re-logging and retry.';
+            tokenStatus.className = 'status error';
+        }
+    });
+
+    // ===== EVENT CREATION =====
+    addEventBtn.addEventListener('click', function () {
+        const title = document.getElementById('event-title').value.trim();
+        const teamA = document.getElementById('team-a').value.trim();
+        const teamB = document.getElementById('team-b').value.trim();
+        const date = document.getElementById('event-date').value;
+        const category = document.getElementById('event-category').value;
+
+        if (!title || !teamA || !teamB || !date) {
+            document.getElementById('event-status').textContent = 'Please fill in all fields';
+            document.getElementById('event-status').className = 'status error';
+            return;
+        }
+
+        const newEvent = {
+            id: Date.now().toString(),
+            title: title,
+            teamA: teamA,
+            teamB: teamB,
+            date: date,
+            category: category,
+            oddsA: 2.10,
+            oddsDraw: 3.25,
+            oddsB: 2.80,
+            createdBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown'
+        };
+
+        if (window.saveEventToFirebase) {
+            window.saveEventToFirebase(newEvent);
+        }
+
+        document.getElementById('event-status').textContent = 'Event added successfully!';
+        document.getElementById('event-status').className = 'status success';
+
+        document.getElementById('event-title').value = '';
+        document.getElementById('team-a').value = '';
+        document.getElementById('team-b').value = '';
+        document.getElementById('event-date').value = '';
+
+        setTimeout(() => {
+            document.getElementById('event-status').className = 'status';
+        }, 3000);
+    });
+
     if (clearEventLogBtn) {
         clearEventLogBtn.addEventListener('click', async function () {
             if (!isCurrentUserModerator()) return;
@@ -868,24 +1723,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
             try {
                 await set(eventLogRef, null);
-                if (eventLogStatus) {
-                    eventLogStatus.textContent = 'Event log cleared.';
-                    eventLogStatus.className = 'status success';
-                }
+                eventLogStatus.textContent = 'Event log cleared.';
+                eventLogStatus.className = 'status success';
             } catch (err) {
-                if (eventLogStatus) {
-                    eventLogStatus.textContent = 'Failed to clear event log.';
-                    eventLogStatus.className = 'status error';
-                }
+                eventLogStatus.textContent = 'Failed to clear event log.';
+                eventLogStatus.className = 'status error';
             }
 
             setTimeout(() => {
-                if (eventLogStatus) eventLogStatus.className = 'status';
+                eventLogStatus.className = 'status';
             }, 3000);
         });
     }
 
-    // ===== NAV =====
     const navLinks = document.querySelectorAll('.nav-link');
     const tabContents = document.querySelectorAll('.tab-content');
 
@@ -901,20 +1751,23 @@ document.addEventListener('DOMContentLoaded', function () {
             const tab = document.getElementById(tabId);
             if (tab) tab.classList.add('active');
 
-            if (this.getAttribute('data-tab') === 'account') updateAccountInfo();
-            if (this.getAttribute('data-tab') === 'admin') updateAdminInfo();
-            if (this.getAttribute('data-tab') === 'ogws') loadEvents();
+            if (this.getAttribute('data-tab') === 'account') {
+                updateAccountInfo();
+            }
+            if (this.getAttribute('data-tab') === 'admin') {
+                updateAdminInfo();
+            }
+            if (this.getAttribute('data-tab') === 'ogws') {
+                loadEvents();
+            }
             if (this.getAttribute('data-tab') === 'community') {
-                const grid = document.getElementById('users-grid');
-                if (grid) {
-                    grid.innerHTML = `
-                        <div class="empty-state">
-                            <i class="fas fa-users"></i>
-                            <h3>Search for Users</h3>
-                            <p>Use the search bar above to find other users on the platform.</p>
-                        </div>
-                    `;
-                }
+                document.getElementById('users-grid').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-users"></i>
+                        <h3>Search for Users</h3>
+                        <p>Use the search bar above to find other users on the platform.</p>
+                    </div>
+                `;
             }
         });
     });
@@ -933,7 +1786,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // ===== AUTH HANDLER =====
+    // ===== GLOBAL AUTH STATE HANDLER =====
     function checkLoginStatus() {
         onAuthStateChanged(auth, async (user) => {
             if (user) {
@@ -946,9 +1799,9 @@ document.addEventListener('DOMContentLoaded', function () {
                         showLoginPage();
                         return;
                     }
-
+                    
                     const accountData = snap.val() || {};
-
+                    
                     if (accountData.deleted === true) {
                         await showMessagePopup(
                             'Account Deleted',
@@ -960,15 +1813,12 @@ document.addEventListener('DOMContentLoaded', function () {
                         showLoginPage();
                         return;
                     }
-
+                    
                     currentUserUid = uid;
                     currentAccount = accountData;
 
                     sessionStorage.setItem('ogwXbet_currentUser', currentAccount.username || '');
                     sessionStorage.setItem('ogwXbet_loginTime', new Date().getTime().toString());
-
-                    // IMPORTANT: always start hidden after login
-                    forceHideChatOverlay();
 
                     showDashboard();
                 } catch (e) {
@@ -980,127 +1830,230 @@ document.addEventListener('DOMContentLoaded', function () {
             } else {
                 currentUserUid = null;
                 currentAccount = null;
-                forceHideChatOverlay();
                 showLoginPage();
             }
         });
     }
 
-    // ===== Announcements rendering =====
-    function renderPinnedAnnouncementsChat() {
-        if (!chatListEl) return;
-        chatListEl.innerHTML = `
-            <div class="chat-item pinned active" data-chat-id="announcements">
-                <div class="chat-item-avatar"><i class="fas fa-shield-alt"></i></div>
-                <div class="chat-item-body">
-                    <div class="chat-item-title">Announcements</div>
-                    <div class="chat-item-preview">Important updates</div>
-                </div>
-                <div class="chat-item-meta"></div>
-            </div>
-        `;
-
-        const item = chatListEl.querySelector('[data-chat-id="announcements"]');
-        if (item) {
-            item.addEventListener('click', () => {
-                selectAnnouncementsChat();
-            });
+    // ===== INITIALIZE USER SEARCH DATA =====
+    async function initializeUserSearch() {
+        if (!currentUserUid || !currentAccount) return;
+        
+        try {
+            const searchSnap = await get(ref(db, `userSearch/${currentUserUid}`));
+            
+            if (!searchSnap.exists()) {
+                await set(ref(db, `userSearch/${currentUserUid}`), {
+                    username: currentAccount.username,
+                    creationDate: currentAccount.creationDate,
+                    profile: currentAccount.profile || {}
+                });
+            } else {
+                const searchData = searchSnap.val();
+                if (searchData.username !== currentAccount.username || 
+                    JSON.stringify(searchData.profile) !== JSON.stringify(currentAccount.profile || {})) {
+                    
+                    await set(ref(db, `userSearch/${currentUserUid}`), {
+                        username: currentAccount.username,
+                        creationDate: currentAccount.creationDate,
+                        profile: currentAccount.profile || {}
+                    });
+                }
+            }
+        } catch (err) {
+            console.error('Failed to initialize user search data:', err);
         }
     }
 
-    function selectAnnouncementsChat() {
-        if (chatSelectedTitleEl) chatSelectedTitleEl.textContent = 'Announcements';
-        if (chatSelectedSubtitleEl) chatSelectedSubtitleEl.textContent = isCurrentUserModerator() ? 'Moderator posting enabled' : 'Read-only for members';
-
-        // Members can't type (if elements exist)
-        if (chatMessageInputEl) {
-            chatMessageInputEl.disabled = !isCurrentUserModerator();
-            chatMessageInputEl.placeholder = isCurrentUserModerator() ? 'Post an announcement...' : 'Announcements are read-only';
+    // ===== UPDATED PROFILE FUNCTIONS WITH CHAT PRIVACY =====
+    function updateProfilePicture() {
+        const pictureUrl = document.getElementById('profile-picture-url').value.trim();
+        const preview = document.getElementById('profile-picture-preview');
+        const placeholder = document.getElementById('profile-picture-placeholder');
+        
+        if (!pictureUrl) {
+            preview.style.display = 'none';
+            placeholder.style.display = 'flex';
+            profileStatus.textContent = 'Picture removed. Using placeholder.';
+            profileStatus.className = 'status info';
+            setTimeout(() => {
+                profileStatus.className = 'status';
+            }, 3000);
+            return;
         }
-        if (sendChatMessageBtn) sendChatMessageBtn.disabled = !isCurrentUserModerator();
 
-        if (typeof announcementsUnsub === 'function') {
-            try { announcementsUnsub(); } catch (e) {}
+        if (!pictureUrl.startsWith('http')) {
+            profileStatus.textContent = 'Please enter a valid URL starting with http:// or https://';
+            profileStatus.className = 'status error';
+            return;
         }
 
-        announcementsUnsub = onValue(announcementsMessagesRef, (snap) => {
-            const msgs = [];
+        preview.onerror = function() {
+            preview.style.display = 'none';
+            placeholder.style.display = 'flex';
+            profileStatus.textContent = 'Failed to load image from this URL. Using placeholder.';
+            profileStatus.className = 'status error';
+        };
+        
+        preview.onload = function() {
+            preview.style.display = 'block';
+            placeholder.style.display = 'none';
+            profileStatus.textContent = 'Picture updated successfully!';
+            profileStatus.className = 'status success';
+            setTimeout(() => {
+                profileStatus.className = 'status';
+            }, 3000);
+        };
+        
+        preview.src = pictureUrl;
+    }
+
+    // ===== SAVE PROFILE SETTINGS WITH CHAT PRIVACY =====
+    async function saveProfileSettings() {
+        if (!currentAccount || !currentUserUid) return;
+
+        profileStatus.textContent = '';
+        profileStatus.className = 'status';
+
+        try {
+            const pictureUrl = document.getElementById('profile-picture-url').value.trim();
+            const bio = document.getElementById('user-bio').value.trim();
+            const showReputation = document.getElementById('privacy-reputation').checked;
+            const showBets = document.getElementById('privacy-bets').checked;
+            const showPredictions = document.getElementById('privacy-predictions').checked;
+            const allowChats = document.getElementById('privacy-chats').checked;
+
+            currentAccount.profile = {
+                picture: pictureUrl,
+                bio: bio,
+                privacy: {
+                    showReputation: showReputation,
+                    showBets: showBets,
+                    showPredictions: showPredictions,
+                    allowChats: allowChats
+                }
+            };
+
+            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+
+            await set(ref(db, `userSearch/${currentUserUid}`), {
+                username: currentAccount.username,
+                creationDate: currentAccount.creationDate,
+                profile: currentAccount.profile
+            });
+
+            profileStatus.textContent = 'Profile settings saved successfully!';
+            profileStatus.className = 'status success';
+
+            setTimeout(() => {
+                profileStatus.className = 'status';
+            }, 3000);
+
+        } catch (err) {
+            console.error('Failed to save profile settings:', err);
+            profileStatus.textContent = 'Failed to save profile settings. Please try again.';
+            profileStatus.className = 'status error';
+        }
+    }
+
+    // ===== SEARCH FUNCTION =====
+    async function searchUsers() {
+        const searchTerm = document.getElementById('user-search').value.trim().toLowerCase();
+        const usersGrid = document.getElementById('users-grid');
+
+        if (!searchTerm) {
+            usersGrid.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-users"></i>
+                    <h3>Search for Users</h3>
+                    <p>Use the search bar above to find other users on the platform.</p>
+                </div>
+            `;
+            return;
+        }
+
+        usersGrid.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-spinner fa-spin"></i>
+                <h3>Searching...</h3>
+                <p>Looking for users matching "${searchTerm}"</p>
+            </div>
+        `;
+
+        try {
+            const snap = await get(userSearchRef);
+            const results = [];
+
             if (snap.exists()) {
-                snap.forEach(child => {
-                    const v = child.val() || {};
-                    msgs.push({ _key: child.key, ...v });
+                snap.forEach(childSnap => {
+                    const userData = childSnap.val() || {};
+                    if (userData.username && userData.username.toLowerCase().includes(searchTerm)) {
+                        results.push({
+                            uid: childSnap.key,
+                            ...userData
+                        });
+                    }
                 });
             }
-            msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
 
-            if (!chatMessagesEl) return;
-
-            if (msgs.length === 0) {
-                chatMessagesEl.innerHTML = `
-                    <div class="chat-empty-state">
-                        <i class="fas fa-bullhorn"></i>
-                        <h3>No announcements yet</h3>
-                        <p>Important updates will appear here.</p>
+            if (results.length === 0) {
+                usersGrid.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-user-times"></i>
+                        <h3>No Users Found</h3>
+                        <p>No users found matching "${searchTerm}"</p>
                     </div>
                 `;
                 return;
             }
 
-            let html = '';
-            msgs.forEach(m => {
-                const time = m.ts ? new Date(m.ts).toLocaleString() : '';
+            let html = '<div class="users-grid-three-column">';
+            results.forEach(user => {
                 html += `
-                    <div class="chat-message-row theirs">
-                        <div class="chat-message-avatar">
-                            <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--accent);">
-                                <i class="fas fa-shield-alt"></i>
+                    <div class="user-search-card">
+                        <div class="user-search-info">
+                            <div class="user-search-header">
+                                <div class="user-avatar-placeholder-search">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div>
+                                    <h4>${user.username}</h4>
+                                    <p>Joined: ${user.creationDate ? new Date(user.creationDate).toLocaleDateString() : 'Unknown'}</p>
+                                </div>
                             </div>
-                        </div>
-                        <div class="chat-message-bubble">
-                            <div class="chat-message-header">
-                                <div class="chat-message-name">Announcements</div>
-                                <div class="chat-message-time">${time}</div>
-                            </div>
-                            <div class="chat-message-text">${(m.text || '').replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
+                            <button class="btn btn-secondary view-profile-btn" data-user-id="${user.uid}">
+                                <i class="fas fa-eye"></i> View Profile
+                            </button>
                         </div>
                     </div>
                 `;
             });
+            html += '</div>';
 
-            chatMessagesEl.innerHTML = html;
-            setTimeout(() => {
-                chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-            }, 30);
-        });
+            usersGrid.innerHTML = html;
 
-        if (sendChatMessageBtn && !sendChatMessageBtn.dataset.bound) {
-            sendChatMessageBtn.dataset.bound = "1";
-            sendChatMessageBtn.addEventListener('click', async () => {
-                if (!isCurrentUserModerator()) return;
-                const text = (chatMessageInputEl ? chatMessageInputEl.value : '').trim();
-                if (!text) return;
-
-                try {
-                    await push(announcementsMessagesRef, {
-                        text,
-                        ts: Date.now(),
-                        postedByUid: currentUserUid,
-                        postedBy: currentAccount?.username || 'Moderator'
-                    });
-                    if (chatMessageInputEl) chatMessageInputEl.value = '';
-                } catch (err) {
-                    console.error('Failed to post announcement:', err);
-                    if (chatStatusEl) {
-                        chatStatusEl.textContent = 'Failed to send.';
-                        chatStatusEl.className = 'status error';
-                        setTimeout(() => { chatStatusEl.className = 'status'; chatStatusEl.textContent = ''; }, 2500);
+            document.querySelectorAll('.view-profile-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const userId = this.getAttribute('data-user-id');
+                    const userData = results.find(user => user.uid === userId);
+                    if (userData) {
+                        openUserProfilePopup(userData);
                     }
-                }
+                });
             });
+
+        } catch (err) {
+            console.error('Failed to search users:', err);
+            usersGrid.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <h3>Search Failed</h3>
+                    <p>Unable to search users at this time. Please try again later.</p>
+                </div>
+            `;
         }
     }
 
-    // ===== Helpers / existing functions (unchanged) =====
     function generateToken() {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
         let token = '';
@@ -1111,7 +2064,6 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function showStatus(message, type) {
-        if (!statusMessage) return;
         statusMessage.textContent = message;
         statusMessage.className = `status ${type}`;
         setTimeout(() => {
@@ -1123,7 +2075,1017 @@ document.addEventListener('DOMContentLoaded', function () {
         return !!(currentAccount && currentAccount.isModerator);
     }
 
-    // NOTE:
-    // Everything else from your original script continues below (events, admin, predictions, etc.)
-    // I did not remove any working systems — only added the chat close fix + announcements wiring.
+    function showDashboard() {
+        if (!currentAccount) {
+            showLoginPage();
+            return;
+        }
+
+        loginPage.style.display = 'none';
+        dashboardPage.style.display = 'block';
+        document.getElementById('username-display').textContent =
+            `Welcome, ${currentAccount.username || 'User'}`;
+
+        if (currentAccount.isModerator) {
+            moderatorBadge.classList.remove('hidden');
+            adminNav.classList.remove('hidden');
+        } else {
+            moderatorBadge.classList.add('hidden');
+            adminNav.classList.add('hidden');
+        }
+
+        loadEvents();
+        updateAdminInfo();
+        updateAccountInfo();
+        
+        initializeUserSearch();
+        loadAnnouncements();
+    }
+
+    function showLoginPage() {
+        dashboardPage.style.display = 'none';
+        loginPage.style.display = 'flex';
+
+        document.getElementById('login-username').value = '';
+        document.getElementById('login-token').value = '';
+        document.getElementById('login-token').type = 'password';
+        document.getElementById('toggle-token').querySelector('i').className = 'fas fa-eye';
+        loginStatus.textContent = '';
+        loginStatus.className = 'status';
+
+        accountCreationSection.classList.add('hidden');
+        loginSection.classList.remove('hidden');
+    }
+
+    // ===== UPDATE ACCOUNT INFO WITH CHAT PRIVACY =====
+    function updateAccountInfo() {
+        if (!currentAccount) return;
+
+        document.getElementById('account-username').textContent = currentAccount.username || '-';
+        document.getElementById('account-creation-date').textContent =
+            currentAccount.creationDate ? new Date(currentAccount.creationDate).toLocaleDateString() : '-';
+        document.getElementById('total-bets').textContent =
+            Array.isArray(currentAccount.bets) ? currentAccount.bets.length : 0;
+        document.getElementById('winning-rate').textContent = '0%';
+
+        const reputation = typeof currentAccount.reputation === 'number'
+            ? currentAccount.reputation
+            : 0;
+        const repEl = document.getElementById('account-reputation');
+        if (repEl) {
+            repEl.textContent = reputation.toFixed(1);
+        }
+
+        const profile = currentAccount.profile || {};
+        const privacy = profile.privacy || {};
+
+        const picturePreview = document.getElementById('profile-picture-preview');
+        const placeholder = document.getElementById('profile-picture-placeholder');
+        const pictureUrlInput = document.getElementById('profile-picture-url');
+        
+        if (picturePreview && placeholder && pictureUrlInput) {
+            if (profile.picture) {
+                picturePreview.src = profile.picture;
+                picturePreview.style.display = 'block';
+                placeholder.style.display = 'none';
+            } else {
+                picturePreview.style.display = 'none';
+                placeholder.style.display = 'flex';
+            }
+            pictureUrlInput.value = profile.picture || '';
+        }
+
+        const bioInput = document.getElementById('user-bio');
+        if (bioInput) {
+            bioInput.value = profile.bio || '';
+        }
+
+        const reputationCheckbox = document.getElementById('privacy-reputation');
+        const betsCheckbox = document.getElementById('privacy-bets');
+        const predictionsCheckbox = document.getElementById('privacy-predictions');
+        const chatsCheckbox = document.getElementById('privacy-chats');
+        
+        if (reputationCheckbox) reputationCheckbox.checked = privacy.showReputation !== false;
+        if (betsCheckbox) betsCheckbox.checked = privacy.showBets !== false;
+        if (predictionsCheckbox) predictionsCheckbox.checked = privacy.showPredictions !== false;
+        if (chatsCheckbox) chatsCheckbox.checked = privacy.allowChats !== false;
+
+        renderPredictionsList(currentAccount);
+    }
+
+    // ===== UPDATED ADMIN INFO =====
+    async function updateAdminInfo() {
+        if (!currentAccount || !currentAccount.isModerator) {
+            return;
+        }
+
+        let userCount = 0;
+        let deletedUserCount = 0;
+        let activeAccountsHTML = '';
+        let deletedAccountsHTML = '';
+
+        try {
+            const snap = await get(accountsRef);
+            if (snap.exists()) {
+                snap.forEach(childSnap => {
+                    const uid = childSnap.key;
+                    const acc = childSnap.val() || {};
+                    
+                    if (acc.deleted === true) {
+                        deletedUserCount++;
+                        const uname = acc.username || '(unknown)';
+                        const created = acc.creationDate
+                            ? new Date(acc.creationDate).toLocaleDateString()
+                            : '-';
+                        const deletedAt = acc.deletedAt
+                            ? new Date(acc.deletedAt).toLocaleString()
+                            : '-';
+                        const deletedBy = acc.deletedBy || 'Unknown';
+
+                        deletedAccountsHTML += `
+                            <tr>
+                                <td>${uname}</td>
+                                <td>${created}</td>
+                                <td>${deletedAt}</td>
+                                <td>${deletedBy}</td>
+                                <td>
+                                    <button class="btn-restore-account" data-uid="${uid}" data-username="${uname}">
+                                        <i class="fas fa-undo"></i> Restore
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    } else {
+                        userCount++;
+                        const uname = acc.username || '(unknown)';
+                        const created = acc.creationDate
+                            ? new Date(acc.creationDate).toLocaleDateString()
+                            : '-';
+
+                        activeAccountsHTML += `
+                            <tr>
+                                <td>${uname}</td>
+                                <td>${created}</td>
+                                <td>${acc.isModerator ? '<span class="moderator-badge">MODERATOR</span>' : 'User'}</td>
+                                <td>
+                                    <button class="btn-delete-account" data-uid="${uid}" data-username="${uname}">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                });
+            }
+        } catch (err) {
+            console.error('Failed to load accounts for admin panel:', err);
+        }
+
+        document.getElementById('total-users').textContent = userCount;
+        document.getElementById('deleted-users').textContent = deletedUserCount;
+
+        try {
+            const events = window.latestEvents || [];
+            document.getElementById('total-events').textContent = events.length;
+            document.getElementById('active-bets').textContent = '0';
+        } catch (error) {
+            document.getElementById('total-events').textContent = '0';
+            document.getElementById('active-bets').textContent = '0';
+        }
+
+        document.getElementById('accounts-table-body').innerHTML =
+            activeAccountsHTML ||
+            `
+            <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-secondary);">No active accounts found</td>
+            </tr>
+        `;
+
+        document.getElementById('deleted-accounts-table-body').innerHTML =
+            deletedAccountsHTML ||
+            `
+            <tr>
+                <td colspan="5" style="text-align: center; color: var(--text-secondary);">No deleted accounts found</td>
+            </tr>
+        `;
+
+        document.querySelectorAll('.btn-delete-account').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const uid = this.getAttribute('data-uid');
+                const username = this.getAttribute('data-username');
+                deleteAccount(uid, username);
+            });
+        });
+
+        document.querySelectorAll('.btn-restore-account').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const uid = this.getAttribute('data-uid');
+                const username = this.getAttribute('data-username');
+                restoreAccount(uid, username);
+            });
+        });
+
+        if (window.renderEventLog) {
+            window.renderEventLog();
+        }
+    }
+
+    // ===== DELETE ACCOUNT =====
+    async function deleteAccount(uid, username) {
+        if (!isCurrentUserModerator()) return;
+
+        const confirmDelete = await showConfirmPopup(
+            'Delete Account',
+            `Are you sure you want to delete the account "${username}"? This will prevent the user from logging in.`,
+            'Delete Account',
+            'Cancel'
+        );
+
+        if (!confirmDelete) return;
+
+        try {
+            const updates = {
+                deleted: true,
+                deletedAt: new Date().toISOString(),
+                deletedBy: currentAccount.username || 'Unknown Moderator'
+            };
+
+            await update(ref(db, `accounts/${uid}`), updates);
+            await remove(ref(db, `userSearch/${uid}`));
+
+            await showMessagePopup(
+                'Account Deleted',
+                `Account "${username}" has been successfully deleted. The user will be logged out if currently active.`
+            );
+
+            updateAdminInfo();
+
+        } catch (err) {
+            console.error('Failed to delete account:', err);
+            await showMessagePopup(
+                'Error',
+                'Failed to delete account. Please try again.'
+            );
+        }
+    }
+
+    // ===== RESTORE ACCOUNT =====
+    async function restoreAccount(uid, username) {
+        if (!isCurrentUserModerator()) return;
+
+        const confirmRestore = await showConfirmPopup(
+            'Restore Account',
+            `Are you sure you want to restore the account "${username}"? The user will be able to log in again.`,
+            'Restore Account',
+            'Cancel'
+        );
+
+        if (!confirmRestore) return;
+
+        try {
+            const accountSnap = await get(ref(db, `accounts/${uid}`));
+            if (!accountSnap.exists()) {
+                throw new Error('Account not found');
+            }
+            
+            const accountData = accountSnap.val();
+
+            const updates = {
+                deleted: false,
+                deletedAt: null,
+                deletedBy: null
+            };
+
+            await update(ref(db, `accounts/${uid}`), updates);
+
+            await set(ref(db, `userSearch/${uid}`), {
+                username: accountData.username,
+                creationDate: accountData.creationDate,
+                profile: accountData.profile || {}
+            });
+
+            await showMessagePopup(
+                'Account Restored',
+                `Account "${username}" has been successfully restored. The user can now log in again.`
+            );
+
+            updateAdminInfo();
+
+        } catch (err) {
+            console.error('Failed to restore account:', err);
+            await showMessagePopup(
+                'Error',
+                'Failed to restore account. Please try again.'
+            );
+        }
+    }
+
+    // ===== PREDICTIONS LIST RENDERING =====
+    function renderPredictionsList(accountData) {
+        const list = document.getElementById('predictions-list');
+        if (!list) return;
+
+        const predictions = Array.isArray(accountData.predictions) ? accountData.predictions : [];
+
+        if (predictions.length === 0) {
+            list.innerHTML = `<p class="empty-text">You haven't made any predictions yet.</p>`;
+            return;
+        }
+
+        let html = '';
+        predictions.forEach(pred => {
+            let status = 'pending';
+            let statusLabel = 'Pending';
+            
+            if (pred.correct === true) {
+                status = 'correct';
+                statusLabel = 'Correct';
+            } else if (pred.correct === false) {
+                status = 'wrong';
+                statusLabel = 'Wrong';
+            } else {
+                const events = window.latestEvents || [];
+                const endedEvent = events.find(ev => ev.id === pred.eventId && ev.category === 'ended');
+                if (endedEvent) {
+                    status = 'pending';
+                    statusLabel = 'Pending Resolution';
+                } else {
+                    status = 'pending';
+                    statusLabel = 'Pending';
+                }
+            }
+
+            const choice = pred.choice === 'A' ? (pred.teamA || 'Team A') : (pred.teamB || 'Team B');
+
+            html += `
+                <div class="prediction-item">
+                    <div class="prediction-header">
+                        <span class="prediction-event">${pred.title || 'Event'}</span>
+                        <span class="prediction-choice">You picked: ${choice}</span>
+                    </div>
+                    <div class="prediction-status ${status}">
+                        Status: ${statusLabel}
+                    </div>
+                </div>
+            `;
+        });
+
+        list.innerHTML = html;
+    }
+
+    // ===== DISPLAY EVENTS WITH PREDICTION STATUS =====
+    window.displayFirebaseEvents = function (events) {
+        document.getElementById('upcoming-events').innerHTML = '';
+        document.getElementById('active-events').innerHTML = '';
+        document.getElementById('ended-events').innerHTML = '';
+
+        if (!events || events.length === 0) {
+            const emptyHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-calendar-times"></i>
+                    <h3>No Events Available</h3>
+                    <p>Check back later for OGW events.</p>
+                </div>
+            `;
+            document.getElementById('upcoming-events').innerHTML = emptyHTML;
+            document.getElementById('active-events').innerHTML = emptyHTML;
+            document.getElementById('ended-events').innerHTML = emptyHTML;
+            return;
+        }
+
+        const upcoming = events.filter(event => event.category === 'upcoming');
+        const active = events.filter(event => event.category === 'active');
+        const ended = events.filter(event => event.category === 'ended');
+
+        displayEvents(upcoming, document.getElementById('upcoming-events'), 'upcoming');
+        displayEvents(active, document.getElementById('active-events'), 'active');
+        displayEvents(ended, document.getElementById('ended-events'), 'ended');
+
+        if (upcoming.length === 0) {
+            document.getElementById('upcoming-events').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-calendar-times"></i>
+                    <h3>No Upcoming Events</h3>
+                    <p>Check back later for upcoming OGW events.</p>
+                </div>
+            `;
+        }
+        if (active.length === 0) {
+            document.getElementById('active-events').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-calendar-times"></i>
+                    <h3>No Active Events</h3>
+                    <p>There are currently no active OGW events.</p>
+                </div>
+            `;
+        }
+        if (ended.length === 0) {
+            document.getElementById('ended-events').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-calendar-times"></i>
+                    <h3>No Ended Events</h3>
+                    <p>Check back later for completed OGW events.</p>
+                </div>
+            `;
+        }
+    };
+
+    function loadEvents() {
+        try {
+            const events = window.latestEvents || [];
+            window.displayFirebaseEvents(events);
+        } catch (error) {
+            console.log('Error loading events');
+        }
+    }
+
+    function displayEvents(events, container, category) {
+        if (!events || events.length === 0) return;
+        const isMod = isCurrentUserModerator();
+        let eventsHTML = '';
+
+        events.forEach(event => {
+            const menuHTML = isMod
+                ? `<div class="event-menu" data-event-id="${event.id}"><i class="fas fa-ellipsis-v"></i></div>`
+                : '';
+
+            const userPrediction = currentAccount && Array.isArray(currentAccount.predictions) 
+                ? currentAccount.predictions.find(p => p.eventId === event.id)
+                : null;
+
+            const predictionStatusHTML = category === 'ended' && userPrediction 
+                ? `<div class="prediction-result ${userPrediction.correct ? 'correct' : 'wrong'}">
+                      <strong>Your Prediction:</strong> ${userPrediction.choice === 'A' ? event.teamA : event.teamB} 
+                      <span style="margin-left: 8px;">
+                          ${userPrediction.correct ? '✓ Correct' : '✗ Wrong'}
+                      </span>
+                   </div>`
+                : '';
+
+            const isPredictedA = userPrediction && userPrediction.choice === 'A';
+            const isPredictedB = userPrediction && userPrediction.choice === 'B';
+            
+            const buttonStyleA = isPredictedA ? 
+                'style="background-color: var(--success); color: white; border-color: var(--success);"' : 
+                'style="background-color: rgba(255, 255, 255, 0.04); color: var(--text-secondary); border-color: rgba(255, 255, 255, 0.1);"';
+            
+            const buttonStyleB = isPredictedB ? 
+                'style="background-color: var(--success); color: white; border-color: var(--success);"' : 
+                'style="background-color: rgba(255, 255, 255, 0.04); color: var(--text-secondary); border-color: rgba(255, 255, 255, 0.1);"';
+
+            eventsHTML += `
+                <div class="event-card" data-event-id="${event.id}">
+                    <div class="event-header">
+                        <div>
+                            <h3 class="event-title">${event.title}</h3>
+                            <div class="event-date">Starts: ${new Date(event.date).toLocaleString()}</div>
+                        </div>
+                        ${menuHTML}
+                    </div>
+                    <div class="event-body">
+                        <div class="event-teams">
+                            <div class="team">
+                                <div class="team-logo">${event.teamA.charAt(0)}</div>
+                                <div>${event.teamA}</div>
+                            </div>
+                            <div class="vs">VS</div>
+                            <div class="team">
+                                <div class="team-logo">${event.teamB.charAt(0)}</div>
+                                <div>${event.teamB}</div>
+                            </div>
+                        </div>
+                        <div class="event-odds">
+                            <div class="odd">
+                                <div>${event.teamA}</div>
+                                <div class="odd-value">${event.oddsA}</div>
+                            </div>
+                            <div class="odd">
+                                <div>Draw</div>
+                                <div class="odd-value">${event.oddsDraw}</div>
+                            </div>
+                            <div class="odd">
+                                <div>${event.teamB}</div>
+                                <div class="odd-value">${event.oddsB}</div>
+                            </div>
+                        </div>
+                        ${predictionStatusHTML}
+                        ${category !== 'ended' ? `
+                        <div class="prediction-actions">
+                            <button class="predict-btn" data-event-id="${event.id}" data-choice="A" ${buttonStyleA}>
+                                Predict ${event.teamA} win
+                            </button>
+                            <button class="predict-btn" data-event-id="${event.id}" data-choice="B" ${buttonStyleB}>
+                                Predict ${event.teamB} win
+                            </button>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        });
+
+        container.innerHTML = eventsHTML;
+    }
+
+    // Event delegation for moderator 3-dots menu and predictions
+    document.addEventListener('click', function (e) {
+        const menuBtn = e.target.closest('.event-menu');
+        if (menuBtn && isCurrentUserModerator()) {
+            const eventId = menuBtn.getAttribute('data-event-id');
+            handleEventMenu(eventId);
+            return;
+        }
+
+        const predictBtn = e.target.closest('.predict-btn');
+        if (predictBtn) {
+            const eventId = predictBtn.getAttribute('data-event-id');
+            const choice = predictBtn.getAttribute('data-choice');
+            handlePrediction(eventId, choice);
+        }
+    });
+
+    // ===== EVENT MENU WITH 3 OPTIONS =====
+    async function handleEventMenu(eventId) {
+        const action = await showChoicePopup(
+            'Event Actions',
+            'Choose what you want to do with this event:',
+            [
+                { label: 'Edit', value: 'edit' },
+                { label: 'Move', value: 'move' },
+                { label: 'Delete', value: 'delete' }
+            ]
+        );
+        if (!action) return;
+
+        if (action === 'edit') {
+            await editEventFull(eventId);
+        } else if (action === 'move') {
+            await moveEventSmart(eventId);
+        } else if (action === 'delete') {
+            await deleteEvent(eventId);
+        }
+    }
+
+    function findEventById(eventId) {
+        const events = window.latestEvents || [];
+        return events.find(ev => ev.id === eventId);
+    }
+
+    // ===== SINGLE-FORM EDIT FUNCTION =====
+    async function editEventFull(eventId) {
+        const eventObj = findEventById(eventId);
+        if (!eventObj) return;
+
+        const formFields = [
+            {
+                name: 'title',
+                label: 'Event Title',
+                type: 'text',
+                value: eventObj.title || ''
+            },
+            {
+                name: 'teamA',
+                label: 'Team A',
+                type: 'text',
+                value: eventObj.teamA || ''
+            },
+            {
+                name: 'teamB',
+                label: 'Team B',
+                type: 'text',
+                value: eventObj.teamB || ''
+            },
+            {
+                name: 'date',
+                label: 'Event Date & Time',
+                type: 'datetime-local',
+                value: eventObj.date || ''
+            },
+            {
+                name: 'category',
+                label: 'Category',
+                type: 'select',
+                value: eventObj.category || 'upcoming',
+                options: [
+                    { label: 'Upcoming', value: 'upcoming' },
+                    { label: 'Active', value: 'active' },
+                    { label: 'Ended', value: 'ended' }
+                ]
+            },
+            {
+                name: 'oddsA',
+                label: 'Odds Team A',
+                type: 'number',
+                value: eventObj.oddsA || 2.10,
+                placeholder: '2.10'
+            },
+            {
+                name: 'oddsDraw',
+                label: 'Odds Draw',
+                type: 'number',
+                value: eventObj.oddsDraw || 3.25,
+                placeholder: '3.25'
+            },
+            {
+                name: 'oddsB',
+                label: 'Odds Team B',
+                type: 'number',
+                value: eventObj.oddsB || 2.80,
+                placeholder: '2.80'
+            }
+        ];
+
+        const result = await showFormPopup('Edit Event', formFields, 'Save Changes', 'Cancel');
+        
+        if (!result) return;
+
+        Object.keys(result).forEach(key => {
+            if (key === 'oddsA' || key === 'oddsDraw' || key === 'oddsB') {
+                eventObj[key] = parseFloat(result[key]) || eventObj[key];
+            } else {
+                eventObj[key] = result[key];
+            }
+        });
+
+        const key = window.eventKeyMap[eventId];
+        if (!key) return;
+
+        try {
+            await set(ref(db, `events/${key}`), eventObj);
+            await showMessagePopup('Success', 'Event updated successfully!');
+        } catch (err) {
+            console.error('Failed to update event:', err);
+            await showMessagePopup('Error', 'Failed to update event.');
+        }
+    }
+
+    // ===== SMART MOVE FUNCTION =====
+    async function moveEventSmart(eventId) {
+        const eventObj = findEventById(eventId);
+        if (!eventObj) return;
+
+        const newCategory = await showChoicePopup(
+            'Move Event',
+            'Select new category for this event:',
+            [
+                { label: 'Upcoming', value: 'upcoming' },
+                { label: 'Active', value: 'active' },
+                { label: 'Ended (Resolve Predictions)', value: 'ended' }
+            ]
+        );
+        if (!newCategory) return;
+
+        if (newCategory === 'ended') {
+            const winnerChoice = await showChoicePopup(
+                'End Event & Resolve Predictions',
+                `Who won "${eventObj.title}"? This will award reputation to correct predictions.`,
+                [
+                    { label: eventObj.teamA, value: 'A' },
+                    { label: eventObj.teamB, value: 'B' }
+                ]
+            );
+            if (!winnerChoice) return;
+
+            console.log('Resolving predictions for event:', eventObj.title, 'Winner:', winnerChoice);
+            await resolveEventPredictions(eventObj, winnerChoice);
+
+            await showMessagePopup(
+                'Predictions Resolved', 
+                `Event ended! Reputation has been awarded to users with correct predictions.`
+            );
+
+            const winnerName = winnerChoice === 'A' ? eventObj.teamA : eventObj.teamB;
+            const moderatorName = currentAccount && currentAccount.username ? currentAccount.username : 'Unknown';
+            
+            const logEntry = {
+                id: eventObj.id,
+                title: eventObj.title,
+                teamA: eventObj.teamA,
+                teamB: eventObj.teamB,
+                date: eventObj.date,
+                winner: winnerName,
+                endedBy: moderatorName,
+                endedAt: new Date().toISOString()
+            };
+
+            try {
+                await push(eventLogRef, logEntry);
+            } catch (err) {
+                console.error('Failed to log event:', err);
+            }
+        }
+
+        eventObj.category = newCategory;
+        const key = window.eventKeyMap[eventId];
+        if (!key) return;
+
+        try {
+            await set(ref(db, `events/${key}`), eventObj);
+            await showMessagePopup('Success', `Event moved to ${newCategory} successfully!`);
+            
+            if (currentUserUid) {
+                const snap = await get(ref(db, `accounts/${currentUserUid}`));
+                if (snap.exists()) {
+                    currentAccount = snap.val() || {};
+                    updateAccountInfo();
+                }
+            }
+        } catch (err) {
+            console.error('Failed to move event:', err);
+            await showMessagePopup('Error', 'Failed to move event.');
+        }
+    }
+
+    // ===== DELETE EVENT FUNCTION =====
+    async function deleteEvent(eventId) {
+        const eventObj = findEventById(eventId);
+        if (!eventObj) return;
+
+        const confirmDelete = await showConfirmPopup(
+            'Delete Event',
+            `Are you sure you want to delete "${eventObj.title}"? This will move it to the event log.`,
+            'Delete Event',
+            'Cancel'
+        );
+
+        if (!confirmDelete) return;
+
+        const logEntry = {
+            id: eventObj.id,
+            title: eventObj.title,
+            teamA: eventObj.teamA,
+            teamB: eventObj.teamB,
+            date: eventObj.date,
+            deletedBy: currentAccount && currentAccount.username ? currentAccount.username : 'Unknown',
+            deletedAt: new Date().toISOString(),
+            reason: 'Manually deleted by moderator'
+        };
+
+        try {
+            await push(eventLogRef, logEntry);
+        } catch (err) {
+            console.error('Failed to log event deletion:', err);
+        }
+
+        const key = window.eventKeyMap[eventId];
+        if (!key) return;
+
+        try {
+            await remove(ref(db, `events/${key}`));
+            await showMessagePopup('Success', 'Event deleted successfully!');
+        } catch (err) {
+            console.error('Failed to delete event:', err);
+            await showMessagePopup('Error', 'Failed to delete event.');
+        }
+    }
+
+    // ===== RESOLVE EVENT PREDICTIONS =====
+    async function resolveEventPredictions(eventObj, winnerChoice) {
+        try {
+            const snap = await get(accountsRef);
+            if (!snap.exists()) return;
+
+            const updates = {};
+
+            snap.forEach(childSnap => {
+                const uid = childSnap.key;
+                const acc = childSnap.val() || {};
+                if (!Array.isArray(acc.predictions)) return;
+
+                let changed = false;
+                acc.predictions.forEach(pred => {
+                    if (pred.eventId === eventObj.id && (pred.correct === null || typeof pred.correct === 'undefined')) {
+                        const userChoice = String(pred.choice).toUpperCase();
+                        const actualWinner = String(winnerChoice).toUpperCase();
+                        const correct = userChoice === actualWinner;
+                        
+                        pred.correct = correct;
+                        if (typeof acc.reputation !== 'number') {
+                            acc.reputation = 0;
+                        }
+                        acc.reputation += correct ? 1 : -0.5;
+                        changed = true;
+                        
+                        console.log(`User ${acc.username}: Predicted ${userChoice}, Winner ${actualWinner}, Correct: ${correct}`);
+                    }
+                });
+
+                if (changed) {
+                    updates[`accounts/${uid}`] = acc;
+                }
+            });
+
+            if (Object.keys(updates).length > 0) {
+                await update(ref(db), updates);
+                console.log('Updated predictions for', Object.keys(updates).length, 'accounts');
+            }
+        } catch (err) {
+            console.error('Failed to resolve predictions:', err);
+        }
+    }
+
+    // ===== PREDICTION HANDLING =====
+    async function handlePrediction(eventId, choice) {
+        if (!currentAccount || !currentUserUid) {
+            await showMessagePopup(
+                'Login Required',
+                'You must be logged in to make predictions.'
+            );
+            return;
+        }
+
+        const eventObj = findEventById(eventId);
+        if (!eventObj) {
+            await showMessagePopup(
+                'Error',
+                'Event not found.'
+            );
+            return;
+        }
+
+        if (eventObj.category === 'ended') {
+            await showMessagePopup(
+                'Event Ended',
+                'This event has already ended. You cannot make new predictions.'
+            );
+            return;
+        }
+
+        if (!Array.isArray(currentAccount.predictions)) {
+            currentAccount.predictions = [];
+        }
+
+        let existing = currentAccount.predictions.find(p => p.eventId === eventId);
+        
+        if (existing) {
+            if (existing.choice === choice) {
+                return;
+            }
+            
+            const confirmSwitch = await showConfirmPopup(
+                'Switch Prediction',
+                `You already predicted ${existing.choice === 'A' ? eventObj.teamA : eventObj.teamB}. Do you want to switch to ${choice === 'A' ? eventObj.teamA : eventObj.teamB}?`,
+                'Switch',
+                'Keep Current'
+            );
+            
+            if (!confirmSwitch) {
+                return;
+            }
+            
+            existing.choice = choice;
+            existing.correct = null;
+            existing.title = eventObj.title;
+            existing.teamA = eventObj.teamA;
+            existing.teamB = eventObj.teamB;
+        } else {
+            currentAccount.predictions.push({
+                eventId: eventObj.id,
+                title: eventObj.title,
+                teamA: eventObj.teamA,
+                teamB: eventObj.teamB,
+                choice: choice,
+                correct: null
+            });
+        }
+
+        try {
+            await set(ref(db, `accounts/${currentUserUid}`), currentAccount);
+        } catch (err) {
+            console.error('Failed to save prediction:', err);
+            await showMessagePopup('Error', 'Failed to save prediction.');
+            return;
+        }
+
+        updatePredictionButtons(eventId, choice);
+        updateAccountInfo();
+    }
+
+    function updatePredictionButtons(eventId, selectedChoice) {
+        const predictBtns = document.querySelectorAll(`.predict-btn[data-event-id="${eventId}"]`);
+        
+        predictBtns.forEach(btn => {
+            const choice = btn.getAttribute('data-choice');
+            if (choice === selectedChoice) {
+                btn.style.backgroundColor = 'var(--success)';
+                btn.style.color = 'white';
+                btn.style.borderColor = 'var(--success)';
+            } else {
+                btn.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                btn.style.color = 'var(--text-secondary)';
+                btn.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+            }
+        });
+    }
+
+    // ===== FORCE ACCOUNT REFRESH FUNCTION =====
+    async function refreshAccountData() {
+        if (!currentUserUid) return;
+        
+        try {
+            const snap = await get(ref(db, `accounts/${currentUserUid}`));
+            if (snap.exists()) {
+                currentAccount = snap.val() || {};
+                updateAccountInfo();
+                loadEvents();
+                
+                if (profileStatus) {
+                    profileStatus.textContent = 'Account data refreshed successfully!';
+                    profileStatus.className = 'status success';
+                    setTimeout(() => {
+                        profileStatus.className = 'status';
+                    }, 3000);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to refresh account data:', err);
+            if (profileStatus) {
+                profileStatus.textContent = 'Failed to refresh data. Please try again.';
+                profileStatus.className = 'status error';
+            }
+        }
+    }
+
+    // Admin event log renderer
+    window.renderEventLog = function () {
+        const tbody = document.getElementById('event-log-body');
+        if (!tbody) return;
+
+        const logs = Array.isArray(window.eventLogEntries) ? window.eventLogEntries : [];
+
+        if (logs.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4" style="text-align:center; color: var(--text-secondary);">
+                        No logged events yet.
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        logs.sort((a, b) => {
+            const ta = a.endedAt || a.timestamp || '';
+            const tb = b.endedAt || b.timestamp || '';
+            return tb.localeCompare(ta);
+        });
+
+        let html = '';
+        logs.forEach(entry => {
+            const endedAt = entry.endedAt ? new Date(entry.endedAt).toLocaleString() : '';
+            html += `
+                <tr>
+                    <td>${entry.title || 'Event'}</td>
+                    <td>${entry.winner || '-'}</td>
+                    <td>${entry.endedBy || 'Unknown'}</td>
+                    <td>${endedAt}</td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html;
+    };
+
+    // ===== MIGRATION HELPER =====
+    window.migrateExistingUsersToSearch = async function () {
+        const auth = getAuth();
+        const user = auth.currentUser;
+        
+        if (!user) {
+            console.log('Please log in as a moderator first');
+            return;
+        }
+        
+        try {
+            const accountsSnap = await get(accountsRef);
+            let migrated = 0;
+            
+            if (accountsSnap.exists()) {
+                const promises = [];
+                
+                accountsSnap.forEach(childSnap => {
+                    const uid = childSnap.key;
+                    const account = childSnap.val() || {};
+                    
+                    if (!account.deleted) {
+                        const searchData = {
+                            username: account.username,
+                            creationDate: account.creationDate,
+                            profile: account.profile || {}
+                        };
+                        
+                        promises.push(set(ref(db, `userSearch/${uid}`), searchData));
+                        migrated++;
+                    }
+                });
+                
+                await Promise.all(promises);
+                console.log(`Successfully migrated ${migrated} users to search index`);
+                await showMessagePopup('Migration Complete', `Successfully migrated ${migrated} users to search index.`);
+            }
+        } catch (err) {
+            console.error('Migration failed:', err);
+            await showMessagePopup('Migration Failed', 'Failed to migrate users. Check console for details.');
+        }
+    };
 });
