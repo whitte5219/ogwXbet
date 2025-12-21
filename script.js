@@ -13,7 +13,10 @@ import {
     get,
     update,
     onChildAdded,
-    onChildRemoved
+    onChildRemoved,
+    query,
+    orderByChild,
+    equalTo
 } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
 import {
@@ -95,6 +98,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const viewProfileInChatBtn = document.getElementById('view-profile-in-chat');
     const blockUserInChatBtn = document.getElementById('block-user-in-chat');
     const chatSearchInput = document.getElementById('chat-search-input');
+    const newChatBtn = document.getElementById('new-chat-btn');
     
     // Admin elements
     const changeTokenBtn = document.getElementById('change-token-btn');
@@ -395,12 +399,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 blockBtn.addEventListener('click', async function() {
                     const userId = this.getAttribute('data-user-id');
                     const username = this.getAttribute('data-username');
-                    // Close profile popup BEFORE showing block confirmation
+                    // Close profile popup first to fix layering
                     closeUserProfilePopup();
-                    // Small delay to ensure popup closes
-                    setTimeout(() => {
-                        blockUser(userId, username);
-                    }, 100);
+                    // Small delay to ensure popup is closed
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    await blockUser(userId, username);
                 });
             }
         }, 100);
@@ -477,6 +480,25 @@ document.addEventListener('DOMContentLoaded', function () {
         
         const chatId = generateChatId(currentUserUid, otherUserId);
         openChatPopup();
+        
+        // Create chat if it doesn't exist
+        const chatRef = ref(db, `chats/userChats/${chatId}`);
+        const chatSnap = await get(chatRef);
+        
+        if (!chatSnap.exists()) {
+            await set(chatRef, {
+                participants: {
+                    user1: currentUserUid,
+                    user2: otherUserId
+                },
+                createdAt: new Date().toISOString(),
+                lastMessage: null,
+                lastMessageTime: null,
+                lastMessageSender: null
+            });
+        }
+        
+        // Load the chat
         await loadChat(chatId, otherUserId, otherUsername);
     }
 
@@ -500,24 +522,8 @@ document.addEventListener('DOMContentLoaded', function () {
         
         chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading messages...</div>';
         
-        const chatRef = ref(db, `chats/userChats/${chatId}`);
-        const chatSnap = await get(chatRef);
-        
-        if (!chatSnap.exists()) {
-            await set(chatRef, {
-                participants: {
-                    user1: currentUserUid,
-                    user2: otherUserId
-                },
-                createdAt: new Date().toISOString(),
-                lastMessage: null,
-                lastMessageTime: null
-            });
-            
-            chatMessagesContainer.innerHTML = '<div class="chat-empty">No messages yet. Start the conversation!</div>';
-        } else {
-            await loadChatMessages(chatId);
-        }
+        // Load existing messages
+        await loadChatMessages(chatId);
         
         setupChatListener(chatId);
     }
@@ -635,11 +641,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function sendMessage() {
-        if (!currentChatId || !currentUserUid || !currentChatOtherUser) return;
+        if (!currentChatId || !currentUserUid || !currentChatOtherUser) {
+            console.error('No active chat or user');
+            return;
+        }
         
         const messageText = chatMessageInput.value.trim();
         if (!messageText) return;
         
+        // Check if blocked
         const isBlocked = await checkIfBlocked(currentChatOtherUser.uid);
         if (isBlocked) {
             await showMessagePopup('Cannot Send Message', 'You have blocked this user. Unblock them first to send messages.');
@@ -652,6 +662,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         
+        // Create message object
         const message = {
             text: messageText,
             senderId: currentUserUid,
@@ -659,12 +670,14 @@ document.addEventListener('DOMContentLoaded', function () {
             read: false
         };
         
+        // Add to Firebase
         const messagesRef = ref(db, `chats/userChats/${currentChatId}/messages`);
         const newMessageRef = push(messagesRef);
         
         try {
             await set(newMessageRef, message);
             
+            // Update chat last message
             const chatRef = ref(db, `chats/userChats/${currentChatId}`);
             await update(chatRef, {
                 lastMessage: messageText,
@@ -672,8 +685,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 lastMessageSender: currentUserUid
             });
             
+            // Add message to UI immediately
+            message._id = newMessageRef.key;
+            addMessageToChat(message, true);
+            
+            // Clear input
             chatMessageInput.value = '';
             chatMessageInput.focus();
+            
+            // Scroll to bottom
+            setTimeout(() => {
+                chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+            }, 100);
             
         } catch (error) {
             console.error('Failed to send message:', error);
@@ -684,23 +707,28 @@ document.addEventListener('DOMContentLoaded', function () {
     async function loadChatList() {
         if (!currentUserUid) return;
         
-        // Start with empty state
-        chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations</div>';
+        // Clear loading state
+        chatListContainer.innerHTML = '';
         
         // Load announcements first
         await loadAnnouncements();
         
-        // Load user chats
+        // Get all chats where current user is a participant
         const userChatsRef = ref(db, 'chats/userChats');
         const chatsSnap = await get(userChatsRef);
         
-        if (!chatsSnap.exists()) return;
+        if (!chatsSnap.exists()) {
+            // Show empty state
+            chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations</div>';
+            return;
+        }
         
         const chats = [];
         chatsSnap.forEach(childSnap => {
             const chat = childSnap.val();
             const chatId = childSnap.key;
             
+            // Check if current user is a participant
             if (chat.participants && 
                 (chat.participants.user1 === currentUserUid || chat.participants.user2 === currentUserUid)) {
                 
@@ -717,9 +745,12 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
         
+        // Sort by last message time (newest first)
         chats.sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
         
+        // Get user info for each chat
         const chatItems = await Promise.all(chats.map(async (chat) => {
+            // Skip if blocked
             const isBlocked = await checkIfBlocked(chat.otherUserId);
             if (isBlocked) return null;
             
@@ -733,14 +764,19 @@ document.addEventListener('DOMContentLoaded', function () {
             };
         }));
         
+        // Filter out null (blocked users)
         const filteredChats = chatItems.filter(chat => chat !== null);
         
-        if (filteredChats.length === 0) return;
+        if (filteredChats.length === 0) {
+            // Remove announcements item if it exists
+            const announcementsItem = chatListContainer.querySelector('.announcements-item');
+            if (!announcementsItem) {
+                chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations</div>';
+            }
+            return;
+        }
         
-        // Remove empty state
-        const emptyState = chatListContainer.querySelector('.chat-list-empty');
-        if (emptyState) emptyState.remove();
-        
+        // Display chat list
         let html = '';
         filteredChats.forEach(chat => {
             const lastMessageTime = chat.lastMessageTime ? 
@@ -749,6 +785,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const lastMessagePreview = chat.lastMessage ? 
                 (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet';
             
+            // Truncate long messages
             const truncatedMessage = lastMessagePreview.length > 30 ? 
                 lastMessagePreview.substring(0, 30) + '...' : lastMessagePreview;
             
@@ -766,27 +803,35 @@ document.addEventListener('DOMContentLoaded', function () {
             `;
         });
         
+        // Add to chat list
         chatListContainer.insertAdjacentHTML('beforeend', html);
         
+        // Add click listeners
         document.querySelectorAll('.chat-list-item').forEach(item => {
             item.addEventListener('click', function() {
                 const chatId = this.getAttribute('data-chat-id');
                 const userId = this.getAttribute('data-user-id');
                 const username = this.getAttribute('data-username');
                 
+                // Remove active class from all items
                 document.querySelectorAll('.chat-list-item').forEach(i => {
                     i.classList.remove('active');
                 });
                 
+                // Add active class to clicked item
                 this.classList.add('active');
+                
+                // Load the chat
                 loadChat(chatId, userId, username);
             });
         });
         
+        // Set up real-time listener for chat list updates
         setupChatListListener();
     }
 
     function setupChatListListener() {
+        // Remove existing listener
         if (chatListListener) {
             chatListListener();
         }
@@ -798,20 +843,25 @@ document.addEventListener('DOMContentLoaded', function () {
             const chat = snapshot.val();
             const chatId = snapshot.key;
             
+            // Check if current user is a participant
             if (chat.participants && 
                 (chat.participants.user1 === currentUserUid || chat.participants.user2 === currentUserUid)) {
                 
                 const otherUserId = chat.participants.user1 === currentUserUid ? 
                     chat.participants.user2 : chat.participants.user1;
                 
+                // Check if already in list
                 if (document.querySelector(`[data-chat-id="${chatId}"]`)) return;
                 
+                // Check if blocked
                 const isBlocked = await checkIfBlocked(otherUserId);
                 if (isBlocked) return;
                 
+                // Get user info
                 const userAccount = await getUserAccount(otherUserId);
                 if (!userAccount) return;
                 
+                // Add to chat list
                 addChatToList(chatId, otherUserId, userAccount.username, chat);
             }
         });
@@ -840,11 +890,16 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
         `;
         
+        // Remove empty state if present
         const emptyState = chatListContainer.querySelector('.chat-list-empty');
-        if (emptyState) emptyState.remove();
+        if (emptyState) {
+            emptyState.remove();
+        }
         
+        // Add to chat list
         chatListContainer.insertAdjacentHTML('beforeend', chatItemHTML);
         
+        // Add click listener to new item
         const newItem = chatListContainer.querySelector(`[data-chat-id="${chatId}"]`);
         newItem.addEventListener('click', function() {
             const chatId = this.getAttribute('data-chat-id');
@@ -877,7 +932,13 @@ document.addEventListener('DOMContentLoaded', function () {
             previewElement.textContent = truncated;
         }
         
-        chatListContainer.prepend(chatItem);
+        // Move to top (but keep announcements at top)
+        const announcementsItem = chatListContainer.querySelector('.announcements-item');
+        if (announcementsItem && announcementsItem.nextSibling) {
+            announcementsItem.parentNode.insertBefore(chatItem, announcementsItem.nextSibling);
+        } else {
+            chatListContainer.prepend(chatItem);
+        }
     }
 
     function formatMessageTime(date) {
@@ -904,46 +965,46 @@ document.addEventListener('DOMContentLoaded', function () {
         
         if (!snap.exists()) return;
         
-        const hasAnnouncements = document.querySelector('.announcements-item');
-        if (hasAnnouncements) return;
-        
-        // Get latest announcement for preview
-        let latestTime = '';
-        let latestMessage = 'System announcements';
-        
-        snap.forEach(childSnap => {
-            const message = childSnap.val();
-            const messageTime = new Date(message.timestamp);
-            if (!latestTime || messageTime > new Date(latestTime)) {
-                latestTime = message.timestamp;
-                latestMessage = message.text.length > 30 ? message.text.substring(0, 30) + '...' : message.text;
+        // Check if we have an announcements chat in our list
+        let hasAnnouncements = false;
+        const chatItems = document.querySelectorAll('.chat-list-item');
+        chatItems.forEach(item => {
+            if (item.getAttribute('data-user-id') === 'BOT') {
+                hasAnnouncements = true;
             }
         });
         
-        const announcementItemHTML = `
-            <div class="chat-list-item announcements-item" data-chat-id="announcements" data-user-id="BOT" data-username="Announcements">
-                <div class="chat-item-avatar" style="background: linear-gradient(135deg, var(--warning), #ff9800);">
-                    <i class="fas fa-bullhorn"></i>
-                </div>
-                <div class="chat-item-info">
-                    <div class="chat-item-username" style="display: flex; align-items: center; gap: 8px;">
-                        Announcements
-                        <span style="font-size: 0.7rem; background: var(--secondary); color: var(--text-secondary); padding: 2px 6px; border-radius: 10px;">pinned</span>
+        if (!hasAnnouncements) {
+            // Add announcements to chat list
+            const announcementItemHTML = `
+                <div class="chat-list-item announcements-item" data-chat-id="announcements" data-user-id="BOT" data-username="Announcements">
+                    <div class="chat-item-avatar" style="background: linear-gradient(135deg, var(--warning), #ff9800);">
+                        <i class="fas fa-bullhorn"></i>
                     </div>
-                    <div class="chat-item-preview">${latestMessage}</div>
+                    <div class="chat-item-info">
+                        <div class="chat-item-username" style="display: flex; align-items: center; gap: 8px;">
+                            Announcements
+                            <span style="font-size: 0.7rem; background: var(--secondary); color: var(--text-secondary); padding: 2px 6px; border-radius: 10px;">pinned</span>
+                        </div>
+                        <div class="chat-item-preview">System announcements and updates</div>
+                    </div>
                 </div>
-            </div>
-        `;
-        
-        const emptyState = chatListContainer.querySelector('.chat-list-empty');
-        if (emptyState) emptyState.remove();
-        
-        chatListContainer.insertAdjacentHTML('afterbegin', announcementItemHTML);
-        
-        const announcementItem = chatListContainer.querySelector('.announcements-item');
-        announcementItem.addEventListener('click', function() {
-            loadAnnouncementsChat();
-        });
+            `;
+            
+            // Remove empty state if present
+            const emptyState = chatListContainer.querySelector('.chat-list-empty');
+            if (emptyState) {
+                emptyState.remove();
+            }
+            
+            chatListContainer.insertAdjacentHTML('afterbegin', announcementItemHTML);
+            
+            // Add click listener
+            const announcementItem = chatListContainer.querySelector('.announcements-item');
+            announcementItem.addEventListener('click', function() {
+                loadAnnouncementsChat();
+            });
+        }
     }
 
     async function loadAnnouncementsChat() {
@@ -958,12 +1019,15 @@ document.addEventListener('DOMContentLoaded', function () {
         viewProfileInChatBtn.style.display = 'none';
         blockUserInChatBtn.style.display = 'none';
         
+        // Disable message input for bot
         chatMessageInput.disabled = true;
         sendChatMessageBtn.disabled = true;
-        chatMessageInput.placeholder = 'You cannot reply to announcements';
+        chatMessageInput.placeholder = 'You cannot reply to system messages';
         
+        // Clear messages
         chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading announcements...</div>';
         
+        // Load announcements
         const announcementsRef = ref(db, 'chats/announcements/messages');
         const snap = await get(announcementsRef);
         
@@ -981,8 +1045,10 @@ document.addEventListener('DOMContentLoaded', function () {
             announcements.push(message);
         });
         
+        // Sort by timestamp (newest first for announcements)
         announcements.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         
+        // Display announcements
         announcements.forEach(message => {
             const timestamp = new Date(message.timestamp);
             const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1007,14 +1073,12 @@ document.addEventListener('DOMContentLoaded', function () {
             chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
         });
         
-        setTimeout(() => {
-            chatMessagesContainer.scrollTop = 0;
-        }, 100);
-        
+        // Set up listener for new announcements
         setupAnnouncementsListener();
     }
 
     function setupAnnouncementsListener() {
+        // Remove existing announcement listener
         if (chatListeners['announcements']) {
             chatListeners['announcements']();
         }
@@ -1047,19 +1111,19 @@ document.addEventListener('DOMContentLoaded', function () {
                         </div>
                     `;
                     
-                    chatMessagesContainer.insertAdjacentHTML('afterbegin', messageHTML);
+                    chatMessagesContainer.insertAdjacentHTML('beforeend', messageHTML);
                 }
             }
         });
     }
 
-    // ===== BLOCKING SYSTEM =====
+    // ===== BLOCKING SYSTEM (FIXED) =====
     async function blockUser(userId, username) {
         if (!currentUserUid || !userId || userId === currentUserUid) return;
         
         const confirmBlock = await showConfirmPopup(
             'Block User',
-            `Are you sure you want to block ${username}?`,
+            `Are you sure you want to block ${username}? This will remove your chat with them.`,
             'Block',
             'Cancel'
         );
@@ -1067,16 +1131,20 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!confirmBlock) return;
         
         try {
+            // Add to blocked list with proper structure
             const blockRef = ref(db, `blocks/${currentUserUid}/blockedUsers/${userId}`);
             await set(blockRef, {
                 blockedAt: new Date().toISOString(),
-                username: username
+                username: username,
+                timestamp: Date.now()
             });
             
+            // Delete chat if exists
             const chatId = generateChatId(currentUserUid, userId);
             const chatRef = ref(db, `chats/userChats/${chatId}`);
             await remove(chatRef);
             
+            // If currently viewing this chat, close it
             if (currentChatOtherUser && currentChatOtherUser.uid === userId) {
                 chatMessagesContainer.innerHTML = '<div class="chat-empty">User blocked. Chat removed.</div>';
                 chatHeaderUsername.textContent = 'Select a conversation';
@@ -1089,9 +1157,19 @@ document.addEventListener('DOMContentLoaded', function () {
                 currentChatOtherUser = null;
             }
             
+            // Remove from chat list
             const chatItem = document.querySelector(`[data-user-id="${userId}"]`);
             if (chatItem) {
                 chatItem.remove();
+            }
+            
+            // Update chat list display
+            const remainingChats = chatListContainer.querySelectorAll('.chat-list-item:not(.announcements-item)');
+            if (remainingChats.length === 0) {
+                const announcementsItem = chatListContainer.querySelector('.announcements-item');
+                if (!announcementsItem) {
+                    chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations</div>';
+                }
             }
             
             await showMessagePopup('User Blocked', `${username} has been blocked.`);
@@ -1107,7 +1185,7 @@ document.addEventListener('DOMContentLoaded', function () {
         
         const confirmUnblock = await showConfirmPopup(
             'Unblock User',
-            `Unblock ${username}?`,
+            `Are you sure you want to unblock ${username}?`,
             'Unblock',
             'Cancel'
         );
@@ -2276,9 +2354,13 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
     if (blockUserInChatBtn) {
-        blockUserInChatBtn.addEventListener('click', function () {
+        blockUserInChatBtn.addEventListener('click', async function () {
             if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
-                blockUser(currentChatOtherUser.uid, currentChatOtherUser.username);
+                // Close chat popup first to fix layering
+                closeChatPopup();
+                // Small delay to ensure popup is closed
+                await new Promise(resolve => setTimeout(resolve, 50));
+                await blockUser(currentChatOtherUser.uid, currentChatOtherUser.username);
             }
         });
     }
@@ -2291,6 +2373,12 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
     if (sendBroadcastBtn) sendBroadcastBtn.addEventListener('click', sendBroadcastMessage);
+
+    // Remove new chat button if it exists
+    if (newChatBtn) {
+        newChatBtn.style.display = 'none';
+        newChatBtn.remove();
+    }
 
     // Close popups when clicking outside
     if (chatPopup) {
