@@ -122,15 +122,13 @@
                 <div class="user-info">
                     <span id="username-display">Welcome, User</span>
                     <span class="moderator-badge hidden" id="moderator-badge">MODERATOR</span>
+                    <button class="btn btn-secondary" id="open-chat-btn" style="margin-right: 10px;">
+                        <i class="fas fa-comment-alt"></i> Chats
+                    </button>
                     <button class="logout-btn" id="logout-btn">Logout</button>
                 </div>
             </div>
         </header>
-
-        <!-- Chat Launcher -->
-        <button id="open-chat-btn" class="chat-launch-btn" aria-label="Open chats" title="Chats">
-            <i class="fas fa-comments"></i>
-        </button>
 
         <!-- Main Content -->
         <div class="dashboard-container">
@@ -244,7 +242,7 @@
                     <div class="privacy-settings" style="margin-top: 25px;">
                         <h4 style="margin-bottom: 15px; color: var(--text);"><i class="fas fa-user-shield"></i> Privacy Settings</h4>
                         
-                        <div class="privacy-option" style="display: flex; justify-content: between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
+                        <div class="privacy-option" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
                             <div>
                                 <div style="font-weight: 500;">Show Reputation</div>
                                 <div style="font-size: 0.85rem; color: var(--text-secondary);">Allow others to see your reputation score</div>
@@ -255,7 +253,7 @@
                             </label>
                         </div>
                         
-                        <div class="privacy-option" style="display: flex; justify-content: between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
+                        <div class="privacy-option" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
                             <div>
                                 <div style="font-weight: 500;">Show Bet History</div>
                                 <div style="font-size: 0.85rem; color: var(--text-secondary);">Allow others to see your betting history</div>
@@ -266,7 +264,7 @@
                             </label>
                         </div>
                         
-                        <div class="privacy-option" style="display: flex; justify-content: between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
+                        <div class="privacy-option" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
                             <div>
                                 <div style="font-weight: 500;">Show Predictions</div>
                                 <div style="font-size: 0.85rem; color: var(--text-secondary);">Allow others to see your predictions</div>
@@ -276,11 +274,11 @@
                                 <span class="toggle-slider"></span>
                             </label>
                         </div>
-                        
-                        <div class="privacy-option" style="display: flex; justify-content: between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
+
+                        <div class="privacy-option" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 10px;">
                             <div>
-                                <div style="font-weight: 500;">Allow Chat Requests</div>
-                                <div style="font-size: 0.85rem; color: var(--text-secondary);">Allow other users to start a chat with you</div>
+                                <div style="font-weight: 500;">Allow Chats</div>
+                                <div style="font-size: 0.85rem; color: var(--text-secondary);">Allow other users to start chats with you</div>
                             </div>
                             <label class="toggle-switch">
                                 <input type="checkbox" id="privacy-chats" checked>
@@ -376,7 +374,7 @@
             <!-- Admin Tab Content -->
             <div id="admin-tab" class="tab-content">
                 <h2>Admin Panel</h2>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage platform accounts and OGW events.</p>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage platform accounts, OGW events, and send broadcasts.</p>
                 
                 <div class="admin-section">
                     <h3><i class="fas fa-chart-bar"></i> Platform Statistics</h3>
@@ -399,22 +397,33 @@
                         </div>
                     </div>
                 </div>
-                
-                <div class="admin-section">
-                    <h3><i class="fas fa-bullhorn"></i> Announcements</h3>
-                    <p style="margin-bottom: 15px; color: var(--text-secondary);">
-                        Post a global announcement to the pinned Announcements chat. Only moderators can send messages there.
-                    </p>
-                    <div class="form-group">
-                        <label for="announcement-message">Announcement Message</label>
-                        <textarea id="announcement-message" rows="4" placeholder="Type an announcement to all users..." style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text); resize: vertical;"></textarea>
-                    </div>
-                    <button class="btn btn-success" id="send-announcement-btn" style="margin-top: 10px;">
-                        <i class="fas fa-paper-plane"></i> Send Announcement
-                    </button>
-                    <div class="status" id="announcement-status"></div>
-                </div>
 
+                <!-- Admin Broadcast Section -->
+                <div class="admin-section">
+                    <h3><i class="fas fa-bullhorn"></i> Broadcast Message</h3>
+                    <p style="margin-bottom: 15px; color: var(--text-secondary);">Send a message to all users on the platform.</p>
+                    
+                    <button class="btn btn-warning" id="admin-broadcast-btn" style="margin-bottom: 20px;">
+                        <i class="fas fa-bullhorn"></i> Open Broadcast Panel
+                    </button>
+                    
+                    <div id="broadcast-section" class="hidden">
+                        <div class="form-group">
+                            <label for="broadcast-message-input">Broadcast Message</label>
+                            <textarea id="broadcast-message-input" placeholder="Enter message to send to all users..." rows="4" style="width: 100%; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text); resize: vertical;"></textarea>
+                        </div>
+                        
+                        <button class="btn btn-danger" id="send-broadcast-btn">
+                            <i class="fas fa-paper-plane"></i> Send to All Users
+                        </button>
+                        
+                        <div class="warning" style="margin-top: 15px;">
+                            <i class="fas fa-exclamation-triangle"></i> 
+                            This message will be sent to ALL users as a system notification. Use responsibly.
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="admin-section">
                     <h3><i class="fas fa-users"></i> Active User Accounts</h3>
                     <p style="margin-bottom: 15px; color: var(--text-secondary);">View and manage all active user accounts.</p>
@@ -523,65 +532,7 @@
         </div>
     </div>
 
-    <!-- Chat System -->
-    <div id="chat-overlay" class="chat-overlay hidden">
-        <div class="chat-window" role="dialog" aria-modal="true" aria-label="Chats">
-            <div class="chat-sidebar">
-                <div class="chat-sidebar-header">
-                    <h3>Chats</h3>
-                    <button id="close-chat-btn" class="chat-icon-btn" aria-label="Close chats" title="Close">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-
-                <div class="chat-sidebar-tools">
-                    <input type="text" id="chat-search" class="chat-search" placeholder="Search chats..." autocomplete="off">
-                </div>
-
-                <div class="chat-list" id="chat-list">
-                    <!-- Chat items rendered by JS -->
-                </div>
-            </div>
-
-            <div class="chat-main">
-                <div class="chat-main-header">
-                    <div class="chat-main-title">
-                        <div id="chat-selected-title">Select a chat</div>
-                        <div id="chat-selected-subtitle" class="chat-selected-subtitle"></div>
-                    </div>
-
-                    <div class="chat-main-actions">
-                        <button class="btn btn-secondary hidden" id="view-chat-profile-btn">
-                            <i class="fas fa-user"></i> View Profile
-                        </button>
-                        <button class="btn btn-danger hidden" id="block-chat-user-btn">
-                            <i class="fas fa-ban"></i> Block
-                        </button>
-                    </div>
-                </div>
-
-                <div class="chat-messages" id="chat-messages">
-                    <div class="chat-empty-state" id="chat-empty-state">
-                        <i class="fas fa-comments"></i>
-                        <h3>No chat selected</h3>
-                        <p>Select a conversation on the left to start messaging.</p>
-                    </div>
-                </div>
-
-                <div class="chat-compose">
-                    <input type="text" id="chat-message-input" placeholder="Type a message..." autocomplete="off" />
-                    <button class="btn" id="send-chat-message-btn">
-                        <i class="fas fa-paper-plane"></i> Send
-                    </button>
-                </div>
-
-                <div class="status" id="chat-status"></div>
-            </div>
-        </div>
-    </div>
-    <!-- END Chat System -->
-
-    <!-- 🔥 INSERTED CUSTOM POPUP SYSTEM HTML -->
+    <!-- 🔥 CUSTOM POPUP SYSTEM -->
     <div id="popup-overlay" class="popup-overlay hidden">
         <div class="popup-dialog">
             <div class="popup-header">
@@ -594,7 +545,6 @@
             <div class="popup-buttons" id="popup-buttons"></div>
         </div>
     </div>
-    <!-- END POPUP SYSTEM -->
 
     <!-- 🔥 USER PROFILE POPUP -->
     <div id="user-profile-popup" class="popup-overlay hidden">
@@ -610,7 +560,80 @@
             </div>
         </div>
     </div>
-    <!-- END USER PROFILE POPUP -->
+
+    <!-- 🔥 CHAT POPUP SYSTEM -->
+    <div id="chat-popup" class="popup-overlay hidden">
+        <div class="popup-dialog" style="width: 90%; max-width: 1200px; height: 85vh; max-height: 800px; display: flex; flex-direction: column; padding: 0;">
+            <!-- Chat Header -->
+            <div class="chat-header" style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center; background: var(--card-bg);">
+                <div>
+                    <h3 style="margin: 0; color: var(--accent);">Messages</h3>
+                </div>
+                <button id="close-chat-btn" style="background: none; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer; padding: 5px;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Chat Container -->
+            <div style="display: flex; flex: 1; overflow: hidden;">
+                <!-- Left Panel - Chat List -->
+                <div class="chat-left-panel" style="width: 300px; border-right: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); display: flex; flex-direction: column;">
+                    <!-- Search Bar -->
+                    <div style="padding: 15px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                        <input type="text" id="chat-search-input" placeholder="Search conversations..." style="width: 100%; padding: 10px 15px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text);">
+                    </div>
+                    
+                    <!-- New Chat Button -->
+                    <button class="btn btn-secondary" id="new-chat-btn" style="margin: 15px; padding: 10px; font-size: 0.9rem;">
+                        <i class="fas fa-plus"></i> New Conversation
+                    </button>
+                    
+                    <!-- Chat List -->
+                    <div id="chat-list" class="chat-list" style="flex: 1; overflow-y: auto; padding: 0 15px 15px 15px;">
+                        <!-- Chat items will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Right Panel - Chat Messages -->
+                <div class="chat-right-panel" style="flex: 1; display: flex; flex-direction: column; background: var(--card-bg);">
+                    <!-- Chat Header -->
+                    <div class="chat-messages-header" style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h4 id="chat-header-username" style="margin: 0 0 5px 0; color: var(--text);">Select a conversation</h4>
+                            <p id="chat-header-status" style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">Click on a conversation to start chatting</p>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="btn btn-secondary" id="view-profile-in-chat" style="display: none; padding: 8px 12px; font-size: 0.85rem;">
+                                <i class="fas fa-user"></i> View Profile
+                            </button>
+                            <button class="btn btn-danger" id="block-user-in-chat" style="display: none; padding: 8px 12px; font-size: 0.85rem;">
+                                <i class="fas fa-ban"></i> Block
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Messages Container -->
+                    <div id="chat-messages" class="chat-messages" style="flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px;">
+                        <!-- Messages will be loaded here -->
+                        <div style="text-align: center; color: var(--text-secondary); margin-top: 50px;">
+                            <i class="fas fa-comment-alt" style="font-size: 3rem; margin-bottom: 15px; opacity: 0.3;"></i>
+                            <p>Select a conversation to start messaging</p>
+                        </div>
+                    </div>
+
+                    <!-- Message Input -->
+                    <div class="chat-input-container" style="padding: 15px 20px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="chat-message-input" placeholder="Type your message here..." style="flex: 1; padding: 12px 15px; border-radius: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); color: var(--text);" disabled>
+                            <button class="btn" id="send-chat-message" style="padding: 12px 20px;" disabled>
+                                <i class="fas fa-paper-plane"></i> Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script type="module" src="script.js"></script>
 </body>
