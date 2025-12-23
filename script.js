@@ -460,8 +460,19 @@ document.addEventListener('DOMContentLoaded', function () {
         
         const isBlocked = await checkIfBlocked(otherUserId);
         if (isBlocked) {
-            await showMessagePopup('Cannot Start Chat', 'You have blocked this user. Unblock them first to start a chat.');
-            return;
+            const doUnblock = await showConfirmPopup(
+                'User Blocked',
+                `You have blocked ${otherUsername || 'this user'}. Unblock to start a chat?`,
+                'Unblock',
+                'Cancel'
+            );
+            if (!doUnblock) return;
+
+            await unblockUser(otherUserId, otherUsername || 'User');
+
+            // If it still exists (e.g. write failed), stop here
+            const stillBlocked = await checkIfBlocked(otherUserId);
+            if (stillBlocked) return;
         }
         
         const amIBlocked = await checkIfUserBlockedMe(otherUserId);
@@ -499,6 +510,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         
         // Load the chat
+        // Make sure it appears in the left list (fix race with loadChatList on open)
+        await loadChatList();
         await loadChat(chatId, otherUserId, otherUsername);
     }
 
@@ -510,17 +523,43 @@ document.addEventListener('DOMContentLoaded', function () {
             uid: otherUserId,
             username: otherUsername
         };
-        
         chatHeaderUsername.textContent = otherUsername || 'User';
         chatHeaderStatus.textContent = 'Online';
         viewProfileInChatBtn.style.display = 'inline-block';
         blockUserInChatBtn.style.display = 'inline-block';
-        
-        chatMessageInput.disabled = false;
-        sendChatMessageBtn.disabled = false;
-        chatMessageInput.focus();
-        
-        chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading messages...</div>';
+
+        // Update UI based on block state (so users can unblock)
+        const blockedByMe = await checkIfBlocked(otherUserId);
+        const blockedMe = await checkIfUserBlockedMe(otherUserId);
+
+        if (blockedByMe) {
+            chatHeaderStatus.textContent = 'Blocked';
+            chatMessageInput.disabled = true;
+            sendChatMessageBtn.disabled = true;
+            chatMessageInput.placeholder = 'You blocked this user';
+            if (blockUserInChatBtn) {
+                blockUserInChatBtn.innerHTML = '<i class="fas fa-unlock"></i> Unblock';
+            }
+        } else if (blockedMe) {
+            chatHeaderStatus.textContent = 'This user has blocked you';
+            chatMessageInput.disabled = true;
+            sendChatMessageBtn.disabled = true;
+            chatMessageInput.placeholder = 'You cannot message this user';
+            if (blockUserInChatBtn) {
+                blockUserInChatBtn.innerHTML = '<i class="fas fa-ban"></i> Block';
+            }
+        } else {
+            chatMessageInput.disabled = false;
+            sendChatMessageBtn.disabled = false;
+            chatMessageInput.placeholder = 'Type your message here...';
+            if (blockUserInChatBtn) {
+                blockUserInChatBtn.innerHTML = '<i class="fas fa-ban"></i> Block';
+            }
+        }
+
+        if (!chatMessageInput.disabled) chatMessageInput.focus();
+
+chatMessagesContainer.innerHTML = '<div class="chat-loading">Loading messages...</div>';
         
         // Load existing messages
         await loadChatMessages(chatId);
@@ -750,21 +789,20 @@ document.addEventListener('DOMContentLoaded', function () {
         
         // Get user info for each chat
         const chatItems = await Promise.all(chats.map(async (chat) => {
-            // Skip if blocked
             const isBlocked = await checkIfBlocked(chat.otherUserId);
-            if (isBlocked) return null;
-            
+
             const userAccount = await getUserAccount(chat.otherUserId);
             if (!userAccount) return null;
-            
+
             return {
                 ...chat,
                 otherUsername: userAccount.username,
-                profile: userAccount.profile || {}
+                profile: userAccount.profile || {},
+                isBlocked
             };
         }));
-        
-        // Filter out null (blocked users)
+
+        // Filter out null (missing accounts)
         const filteredChats = chatItems.filter(chat => chat !== null);
         
         if (filteredChats.length === 0) {
@@ -782,20 +820,21 @@ document.addEventListener('DOMContentLoaded', function () {
             const lastMessageTime = chat.lastMessageTime ? 
                 formatMessageTime(new Date(chat.lastMessageTime)) : 'Just now';
             const isLastMessageFromMe = chat.lastMessageSender === currentUserUid;
-            const lastMessagePreview = chat.lastMessage ? 
-                (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet';
+            const lastMessagePreview = chat.isBlocked
+                ? 'You blocked this user'
+                : (chat.lastMessage ? (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet');
             
             // Truncate long messages
             const truncatedMessage = lastMessagePreview.length > 30 ? 
                 lastMessagePreview.substring(0, 30) + '...' : lastMessagePreview;
             
             html += `
-                <div class="chat-list-item" data-chat-id="${chat.id}" data-user-id="${chat.otherUserId}" data-username="${chat.otherUsername}">
+                <div class="chat-list-item${chat.isBlocked ? ' blocked' : ''}" data-chat-id="${chat.id}" data-user-id="${chat.otherUserId}" data-username="${chat.otherUsername}">
                     <div class="chat-item-avatar">
                         <i class="fas fa-user"></i>
                     </div>
                     <div class="chat-item-info">
-                        <div class="chat-item-username">${chat.otherUsername}</div>
+                        <div class="chat-item-username">${chat.otherUsername}${chat.isBlocked ? ' <span class="blocked-badge">Blocked</span>' : ''}</div>
                         <div class="chat-item-preview">${truncatedMessage}</div>
                     </div>
                     <div class="chat-item-time">${lastMessageTime}</div>
@@ -855,35 +894,34 @@ document.addEventListener('DOMContentLoaded', function () {
                 
                 // Check if blocked
                 const isBlocked = await checkIfBlocked(otherUserId);
-                if (isBlocked) return;
-                
                 // Get user info
                 const userAccount = await getUserAccount(otherUserId);
                 if (!userAccount) return;
                 
                 // Add to chat list
-                addChatToList(chatId, otherUserId, userAccount.username, chat);
+                addChatToList(chatId, otherUserId, userAccount.username, chat, isBlocked);
             }
         });
     }
 
-    function addChatToList(chatId, otherUserId, username, chat) {
+    function addChatToList(chatId, otherUserId, username, chat, isBlocked = false) {
         const lastMessageTime = chat.lastMessageTime ? 
             formatMessageTime(new Date(chat.lastMessageTime)) : 'Just now';
         const isLastMessageFromMe = chat.lastMessageSender === currentUserUid;
-        const lastMessagePreview = chat.lastMessage ? 
-            (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet';
+        const lastMessagePreview = isBlocked
+            ? 'You blocked this user'
+            : (chat.lastMessage ? (isLastMessageFromMe ? `You: ${chat.lastMessage}` : chat.lastMessage) : 'No messages yet');
         
         const truncatedMessage = lastMessagePreview.length > 30 ? 
             lastMessagePreview.substring(0, 30) + '...' : lastMessagePreview;
         
         const chatItemHTML = `
-            <div class="chat-list-item" data-chat-id="${chatId}" data-user-id="${otherUserId}" data-username="${username}">
+            <div class="chat-list-item${isBlocked ? ' blocked' : ''}" data-chat-id="${chatId}" data-user-id="${otherUserId}" data-username="${username}">
                 <div class="chat-item-avatar">
                     <i class="fas fa-user"></i>
                 </div>
                 <div class="chat-item-info">
-                    <div class="chat-item-username">${username}</div>
+                    <div class="chat-item-username">${username}${isBlocked ? ' <span class="blocked-badge">Blocked</span>' : ''}</div>
                     <div class="chat-item-preview">${truncatedMessage}</div>
                 </div>
                 <div class="chat-item-time">${lastMessageTime}</div>
@@ -1123,7 +1161,7 @@ document.addEventListener('DOMContentLoaded', function () {
         
         const confirmBlock = await showConfirmPopup(
             'Block User',
-            `Are you sure you want to block ${username}? This will remove your chat with them.`,
+            `Are you sure you want to block ${username}? You won't be able to message each other.`,
             'Block',
             'Cancel'
         );
@@ -1139,39 +1177,21 @@ document.addEventListener('DOMContentLoaded', function () {
                 timestamp: Date.now()
             });
             
-            // Delete chat if exists
-            const chatId = generateChatId(currentUserUid, userId);
-            const chatRef = ref(db, `chats/userChats/${chatId}`);
-            await remove(chatRef);
-            
-            // If currently viewing this chat, close it
+            // Don't hard-delete chats on block (RTDB rules may deny deletes). The block itself prevents messaging.            // If currently viewing this chat, keep it open but disable messaging (and allow Unblock)
             if (currentChatOtherUser && currentChatOtherUser.uid === userId) {
-                chatMessagesContainer.innerHTML = '<div class="chat-empty">User blocked. Chat removed.</div>';
-                chatHeaderUsername.textContent = 'Select a conversation';
-                chatHeaderStatus.textContent = 'Click on a conversation to start chatting';
+                chatHeaderStatus.textContent = 'Blocked';
                 chatMessageInput.disabled = true;
                 sendChatMessageBtn.disabled = true;
-                viewProfileInChatBtn.style.display = 'none';
-                blockUserInChatBtn.style.display = 'none';
-                currentChatId = null;
-                currentChatOtherUser = null;
-            }
-            
-            // Remove from chat list
-            const chatItem = document.querySelector(`[data-user-id="${userId}"]`);
-            if (chatItem) {
-                chatItem.remove();
-            }
-            
-            // Update chat list display
-            const remainingChats = chatListContainer.querySelectorAll('.chat-list-item:not(.announcements-item)');
-            if (remainingChats.length === 0) {
-                const announcementsItem = chatListContainer.querySelector('.announcements-item');
-                if (!announcementsItem) {
-                    chatListContainer.innerHTML = '<div class="chat-list-empty">No conversations</div>';
+                chatMessageInput.placeholder = 'You blocked this user';
+                if (blockUserInChatBtn) {
+                    blockUserInChatBtn.style.display = 'inline-block';
+                    blockUserInChatBtn.innerHTML = '<i class="fas fa-unlock"></i> Unblock';
                 }
             }
             
+            // Refresh chat list UI (badges/classes)
+            await loadChatList();
+
             await showMessagePopup('User Blocked', `${username} has been blocked.`);
             
         } catch (error) {
@@ -1195,6 +1215,30 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             const blockRef = ref(db, `blocks/${currentUserUid}/blockedUsers/${userId}`);
             await remove(blockRef);
+
+            // Refresh chat list UI
+            await loadChatList();
+
+            // If currently viewing this chat, restore messaging if possible
+            if (currentChatOtherUser && currentChatOtherUser.uid === userId) {
+                const blockedMe = await checkIfUserBlockedMe(userId);
+                if (blockedMe) {
+                    chatHeaderStatus.textContent = 'This user has blocked you';
+                    chatMessageInput.disabled = true;
+                    sendChatMessageBtn.disabled = true;
+                    chatMessageInput.placeholder = 'You cannot message this user';
+                } else {
+                    chatHeaderStatus.textContent = 'Online';
+                    chatMessageInput.disabled = false;
+                    sendChatMessageBtn.disabled = false;
+                    chatMessageInput.placeholder = 'Type your message here...';
+                }
+                if (blockUserInChatBtn) {
+                    blockUserInChatBtn.style.display = 'inline-block';
+                    blockUserInChatBtn.innerHTML = '<i class="fas fa-ban"></i> Block';
+                }
+            }
+
             
             await showMessagePopup('User Unblocked', `${username} has been unblocked.`);
             
@@ -2356,11 +2400,41 @@ document.addEventListener('DOMContentLoaded', function () {
     if (blockUserInChatBtn) {
         blockUserInChatBtn.addEventListener('click', async function () {
             if (currentChatOtherUser && currentChatOtherUser.uid !== 'BOT') {
-                // Close chat popup first to fix layering
-                closeChatPopup();
-                // Small delay to ensure popup is closed
-                await new Promise(resolve => setTimeout(resolve, 50));
-                await blockUser(currentChatOtherUser.uid, currentChatOtherUser.username);
+                const uid = currentChatOtherUser.uid;
+                const uname = currentChatOtherUser.username;
+
+                const isBlocked = await checkIfBlocked(uid);
+                if (isBlocked) {
+                    await unblockUser(uid, uname);
+                } else {
+                    await blockUser(uid, uname);
+                }
+
+                // Update current chat controls (no full reload needed)
+                if (currentChatOtherUser && currentChatOtherUser.uid === uid) {
+                    const blockedByMeNow = await checkIfBlocked(uid);
+                    const blockedMeNow = await checkIfUserBlockedMe(uid);
+
+                    if (blockedByMeNow) {
+                        chatHeaderStatus.textContent = 'Blocked';
+                        chatMessageInput.disabled = true;
+                        sendChatMessageBtn.disabled = true;
+                        chatMessageInput.placeholder = 'You blocked this user';
+                        blockUserInChatBtn.innerHTML = '<i class="fas fa-unlock"></i> Unblock';
+                    } else if (blockedMeNow) {
+                        chatHeaderStatus.textContent = 'This user has blocked you';
+                        chatMessageInput.disabled = true;
+                        sendChatMessageBtn.disabled = true;
+                        chatMessageInput.placeholder = 'You cannot message this user';
+                        blockUserInChatBtn.innerHTML = '<i class="fas fa-ban"></i> Block';
+                    } else {
+                        chatHeaderStatus.textContent = 'Online';
+                        chatMessageInput.disabled = false;
+                        sendChatMessageBtn.disabled = false;
+                        chatMessageInput.placeholder = 'Type your message here...';
+                        blockUserInChatBtn.innerHTML = '<i class="fas fa-ban"></i> Block';
+                    }
+                }
             }
         });
     }
