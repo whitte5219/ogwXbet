@@ -1092,6 +1092,18 @@ nav a.active {
     transition: opacity 0.25s ease;
 }
 
+/* Ensure the global popup (#popup-overlay) always appears above other overlays like chat/user profile */
+#chat-popup {
+    z-index: 100000;
+}
+#user-profile-popup {
+    z-index: 100010;
+}
+#popup-overlay {
+    z-index: 100050;
+}
+
+
 .popup-overlay.active {
     opacity: 1;
     pointer-events: all;
@@ -1822,14 +1834,54 @@ nav a.active {
 }
 
 .send-message-btn {
-    padding: 12px 20px;
-    height: 46px;
-    min-width: 80px;
+    /* Override global .btn (width:100%) so the send button doesn't stretch */
+    width: 46px !important;
+    min-width: 46px !important;
+    height: 46px !important;
+    padding: 0 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
     font-size: 0.95rem;
+    flex: 0 0 46px !important;
 }
+
+.chat-input-container > div {
+    /* Keep input and button aligned even when global button styles change */
+    align-items: stretch !important;
+}
+
+#chat-message-input {
+    min-width: 0;
+}
+
+.chat-list-item.blocked {
+    opacity: 0.65;
+}
+
+.chat-list-item.blocked .chat-item-preview {
+    font-style: italic;
+}
+
+.blocked-badge {
+    background: rgba(244, 67, 54, 0.18);
+    color: var(--danger);
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    margin-left: 8px;
+    white-space: nowrap;
+}
+
+.chat-list-item.announcements-item {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    /* match panel background so it doesn't visually collide with the header when scrolling */
+    background: rgba(255,255,255,0.06);
+}
+
 
 .send-message-btn:disabled {
     opacity: 0.5;
